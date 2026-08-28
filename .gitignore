@@ -3,6 +3,10 @@
 *.log
 *.pyc
 *.swp
+*.tmp
+*.temp
+*.bak
+*.dmp
 .DS_Store
 .atom/
 .build/
@@ -17,6 +21,8 @@ migrate_working_dir/
 *.ipr
 *.iws
 .idea/
+.vs/
+.vscode/settings.json
 
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
@@ -34,10 +40,25 @@ migrate_working_dir/
 /coverage/
 /dist/
 /.release-build-work/
+/.cache/
 /windows/local.properties
 /windows/runner/private_config.h
 /windows/xray/bin/*
 !/windows/xray/bin/.gitkeep
+
+# Machine-local configuration, credentials, signing material, and registry data
+.env
+.env.*
+!.env.example
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+/server/.niran-private/
 
 # Symbolication related
 app.*.symbols

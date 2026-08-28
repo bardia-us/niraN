@@ -76,6 +76,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       windows_backend_) {
     return windows_backend_->HandleAsyncCompletion(lparam) ? 0 : 1;
   }
+  if (message == niran::WindowsBackendBridge::kExitApplicationMessage) {
+    exit_requested_ = true;
+    if (windows_backend_) windows_backend_->Shutdown();
+    DestroyWindow(hwnd);
+    return 0;
+  }
   if (message == kTrayMessage) {
     if (LOWORD(lparam) == WM_LBUTTONUP) {
       ShowFromTray();

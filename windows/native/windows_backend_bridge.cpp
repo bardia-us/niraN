@@ -1,12 +1,20 @@
+#ifndef SECURITY_WIN32
+#define SECURITY_WIN32
+#endif
+
 #include "windows/native/windows_backend_bridge.h"
 
 #include <flutter/encodable_value.h>
 #include <flutter/standard_method_codec.h>
 #include <shellapi.h>
 #include <windows.h>
+#include <security.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <lmcons.h>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -105,6 +113,99 @@ bool IsProcessElevated() {
       token, TokenElevation, &elevation, sizeof(elevation), &size);
   CloseHandle(token);
   return queried && elevation.TokenIsElevated != 0;
+}
+
+std::wstring RegistryString(HKEY root, const wchar_t* path,
+                            const wchar_t* name) {
+  DWORD size = 0;
+  const LSTATUS measured = RegGetValueW(root, path, name, RRF_RT_REG_SZ,
+                                        nullptr, nullptr, &size);
+  if (measured != ERROR_SUCCESS || size < sizeof(wchar_t)) return {};
+  std::wstring value(size / sizeof(wchar_t), L'\0');
+  if (RegGetValueW(root, path, name, RRF_RT_REG_SZ, nullptr, value.data(),
+                   &size) != ERROR_SUCCESS) {
+    return {};
+  }
+  while (!value.empty() && value.back() == L'\0') value.pop_back();
+  return value;
+}
+
+DWORD RegistryDword(HKEY root, const wchar_t* path, const wchar_t* name) {
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  if (RegGetValueW(root, path, name, RRF_RT_REG_DWORD, nullptr, &value,
+                   &size) != ERROR_SUCCESS) {
+    return 0;
+  }
+  return value;
+}
+
+std::wstring DeviceName() {
+  DWORD size = 0;
+  GetComputerNameExW(ComputerNamePhysicalDnsHostname, nullptr, &size);
+  if (size != 0) {
+    std::wstring value(static_cast<size_t>(size), L'\0');
+    if (GetComputerNameExW(ComputerNamePhysicalDnsHostname, value.data(),
+                           &size)) {
+      value.resize(size);
+      return value;
+    }
+  }
+  wchar_t fallback[MAX_COMPUTERNAME_LENGTH + 1]{};
+  size = MAX_COMPUTERNAME_LENGTH + 1;
+  if (GetComputerNameW(fallback, &size)) return std::wstring(fallback, size);
+  return L"Windows PC";
+}
+
+std::wstring WindowsUserName() {
+  ULONG size = 0;
+  GetUserNameExW(NameDisplay, nullptr, &size);
+  if (size != 0) {
+    std::wstring value(static_cast<size_t>(size), L'\0');
+    if (GetUserNameExW(NameDisplay, value.data(), &size)) {
+      while (!value.empty() && value.back() == L'\0') value.pop_back();
+      if (!value.empty()) return value;
+    }
+  }
+  wchar_t fallback[UNLEN + 1]{};
+  DWORD fallback_size = UNLEN + 1;
+  if (GetUserNameW(fallback, &fallback_size) && fallback_size > 0) {
+    return std::wstring(fallback, fallback_size - 1);
+  }
+  return L"Unknown user";
+}
+
+std::wstring WindowsVersion() {
+  constexpr wchar_t kWindowsPath[] =
+      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+  std::wstring product =
+      RegistryString(HKEY_LOCAL_MACHINE, kWindowsPath, L"ProductName");
+  const std::wstring display =
+      RegistryString(HKEY_LOCAL_MACHINE, kWindowsPath, L"DisplayVersion");
+  const std::wstring build =
+      RegistryString(HKEY_LOCAL_MACHINE, kWindowsPath, L"CurrentBuildNumber");
+  const DWORD revision =
+      RegistryDword(HKEY_LOCAL_MACHINE, kWindowsPath, L"UBR");
+  const unsigned long build_number =
+      build.empty() ? 0 : std::wcstoul(build.c_str(), nullptr, 10);
+  if (product.find(L"Windows Server") == std::wstring::npos) {
+    const wchar_t* detected =
+        build_number >= 22000 ? L"Windows 11" : L"Windows 10";
+    const size_t edition_separator = product.find(L' ', 8);
+    const std::wstring edition = edition_separator == std::wstring::npos
+                                     ? L""
+                                     : product.substr(edition_separator);
+    product = detected + edition;
+  }
+  std::wostringstream value;
+  value << (product.empty() ? L"Windows" : product);
+  if (!display.empty()) value << L" " << display;
+  if (!build.empty()) {
+    value << L" (build " << build;
+    if (revision != 0) value << L"." << revision;
+    value << L")";
+  }
+  return value.str();
 }
 
 }  // namespace
@@ -206,6 +307,24 @@ void WindowsBackendBridge::HandleMethodCall(
     values[flutter::EncodableValue("appVersion")] =
         flutter::EncodableValue(FLUTTER_VERSION);
     result->Success(flutter::EncodableValue(values));
+    return;
+  }
+  if (method == "getDeviceRegistrationInfo") {
+    flutter::EncodableMap values;
+    values[flutter::EncodableValue("deviceName")] =
+        flutter::EncodableValue(Utf8(DeviceName()));
+    values[flutter::EncodableValue("windowsUsername")] =
+        flutter::EncodableValue(Utf8(WindowsUserName()));
+    values[flutter::EncodableValue("windowsVersion")] =
+        flutter::EncodableValue(Utf8(WindowsVersion()));
+    values[flutter::EncodableValue("appVersion")] =
+        flutter::EncodableValue(FLUTTER_VERSION);
+    result->Success(flutter::EncodableValue(values));
+    return;
+  }
+  if (method == "exitApplication") {
+    result->Success();
+    PostMessageW(window_, kExitApplicationMessage, 0, 0);
     return;
   }
   if (method == "validateTunPrerequisites") {

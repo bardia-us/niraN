@@ -15,26 +15,12 @@ from Windows System Proxy and native Xray TUN.
 - System tray lifecycle: closing the window keeps Core running; Tray > Exit
   performs the final cleanup
 
-## Build
+## Development
 
-Requirements: Flutter stable, MSVC v143 x64/x86 Build Tools, C++ CMake Tools
-for Windows, and a Windows 10/11 SDK.
-
-```powershell
-flutter config --enable-windows-desktop
-flutter pub get
-flutter build windows --release
-```
-
-The complete runnable bundle is generated at:
-
-```text
-build/windows/x64/runner/Release/
-```
-
-Private build inputs can be placed in `windows/local.properties`; this file is
-ignored by Git and must never be committed. Xray and Wintun are provisioned by
-checksum-verified scripts during a clean build and are also excluded from Git.
+The repository contains the Flutter client, Win32 bridge, reproducible Xray and
+Wintun provisioning scripts, and the optional device-registry server files.
+Machine-local inputs and generated artifacts are excluded from source control.
+Runnable Windows bundles are published only through GitHub Releases.
 
 ## License notices
 

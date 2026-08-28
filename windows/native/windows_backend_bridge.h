@@ -21,6 +21,7 @@ namespace niran {
 class WindowsBackendBridge {
  public:
   static constexpr UINT kAsyncCompletionMessage = WM_APP + 42;
+  static constexpr UINT kExitApplicationMessage = WM_APP + 43;
 
   WindowsBackendBridge(flutter::BinaryMessenger* messenger, HWND window);
   ~WindowsBackendBridge();

@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 
 abstract interface class WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getBuildConfig();
+  Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo();
+  Future<void> exitApplication();
   Future<void> validateTunPrerequisites();
   Future<void> startXray(String configPath, {required bool tunMode});
   Future<void> stopXray();
@@ -39,6 +41,16 @@ final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getBuildConfig() async =>
       (await _channel.invokeMethod<Map<dynamic, dynamic>>('getBuildConfig')) ??
       {};
+
+  @override
+  Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getDeviceRegistrationInfo',
+      )) ??
+      {};
+
+  @override
+  Future<void> exitApplication() => _channel.invokeMethod('exitApplication');
 
   @override
   Future<void> validateTunPrerequisites() =>

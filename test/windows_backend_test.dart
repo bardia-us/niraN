@@ -716,6 +716,12 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   };
 
   @override
+  Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo() async => const {};
+
+  @override
+  Future<void> exitApplication() async {}
+
+  @override
   Future<void> validateTunPrerequisites() async {
     calls.add('validateTun');
     if (tunValidationFailure case final failure?) throw failure;
