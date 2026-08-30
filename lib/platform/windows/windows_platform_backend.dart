@@ -2,13 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
 import '../../core/platform/platform_backend.dart';
+import '../../core/registration/device_registration.dart';
 import 'windows_native_host.dart';
 import 'windows_real_delay.dart';
+import 'windows_remote_access.dart';
 import 'windows_server_record.dart';
 import 'windows_subscription_parser.dart';
 import 'windows_xray_config_builder.dart';
@@ -19,11 +20,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     Directory? dataDirectory,
     Future<void> Function(int port)? proxyReadinessProbe,
     Future<void> Function(List<int> ports)? localPortPreflight,
+    RemoteAccessController? remoteAccess,
     bool autoStartCore = true,
   }) : _host = host ?? MethodChannelWindowsNativeHost(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _proxyReadinessProbe = proxyReadinessProbe,
        _localPortPreflight = localPortPreflight,
+       _remoteAccess = remoteAccess ?? windowsRemoteAccess,
        _autoStartCore = autoStartCore {
     final nativeHost = _host;
     if (nativeHost is MethodChannelWindowsNativeHost) {
@@ -31,7 +34,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.0';
+  static const _appVersionFallback = '0.3.1';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -40,6 +43,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final Directory _dataDirectory;
   final Future<void> Function(int port)? _proxyReadinessProbe;
   final Future<void> Function(List<int> ports)? _localPortPreflight;
+  final RemoteAccessController _remoteAccess;
   final bool _autoStartCore;
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
@@ -91,6 +95,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     await _loadSubscriptionCache();
     _buildConfig = Map<String, Object?>.from(await _host.getBuildConfig());
     _appVersion = '${_buildConfig['appVersion'] ?? _appVersionFallback}';
+    try {
+      await _remoteAccess.requireAllowed();
+    } on Object catch (error) {
+      await _enforceBlockedAccess(error);
+      rethrow;
+    }
     _settings = {
       ..._settings,
       'telegramUrlConfigured': _telegramUrl.isNotEmpty,
@@ -105,7 +115,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (recovered) {
       _log('warning', 'Recovered Windows proxy settings after an unclean exit');
     }
-    if (_servers.isEmpty && _subscriptionUrl.isNotEmpty) {
+    if (_servers.isEmpty) {
       try {
         await _refreshSubscription(emit: false);
       } on Object catch (error) {
@@ -135,50 +145,19 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<Map<dynamic, dynamic>> _refreshSubscription({
     required bool emit,
   }) async {
-    final endpoint = Uri.tryParse(_subscriptionUrl);
-    if (endpoint == null ||
-        endpoint.scheme != 'https' ||
-        endpoint.host.isEmpty) {
-      throw PlatformException(
-        code: 'subscription',
-        message: 'Internal subscription endpoint is not configured',
-      );
-    }
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 12)
-      ..userAgent = 'niraN/$_appVersion Windows';
     try {
-      final request = await client
-          .getUrl(endpoint)
-          .timeout(const Duration(seconds: 12));
-      request.headers
-        ..set(HttpHeaders.acceptHeader, 'text/plain, application/json')
-        ..set(HttpHeaders.cacheControlHeader, 'no-cache');
-      final response = await request.close().timeout(
-        const Duration(seconds: 20),
-      );
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-          'Subscription request failed with HTTP ${response.statusCode}',
-        );
+      final remote = await _remoteAccess.fetchSubscription();
+      if (remote.bytes.length > _maxSubscriptionBytes) {
+        throw const HttpException('Subscription response is too large');
       }
-      final bytes = BytesBuilder(copy: false);
-      await for (final chunk in response) {
-        bytes.add(chunk);
-        if (bytes.length > _maxSubscriptionBytes) {
-          throw const HttpException('Subscription response is too large');
-        }
-      }
-      final parsed = _parser.parse(utf8.decode(bytes.takeBytes()));
+      final parsed = _parser.parse(utf8.decode(remote.bytes));
       if (parsed.isEmpty) {
         throw const FormatException(
           'Subscription contains no supported servers',
         );
       }
       _servers = parsed.map(_applyProfileOverride).toList(growable: false);
-      _usage = WindowsSubscriptionUsage.fromHeader(
-        response.headers.value('subscription-userinfo'),
-      );
+      _usage = WindowsSubscriptionUsage.fromHeader(remote.usageHeader);
       _lastUpdated = DateTime.now().millisecondsSinceEpoch;
       _hiddenIds.clear();
       _subscriptionError = null;
@@ -195,12 +174,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       if (emit) _emit('subscription', data);
       return data;
     } on Object catch (error) {
+      await _enforceBlockedAccess(error);
       _subscriptionError = _safeError(error);
       _log('warning', 'Subscription update failed');
       if (emit) _emit('subscriptionError', _subscriptionError);
       rethrow;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -335,6 +313,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _transitioning = true;
     _setConnection('preparing', server);
     try {
+      await _remoteAccess.requireAllowed();
       _warnUnsupportedProfileFeatures(server);
       await _assertLocalProxyPortsAvailable();
       final cidrs = await _loadIranCidrs();
@@ -364,6 +343,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
+      if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
       _setConnection('error', server, error: _safeError(error));
       _log('error', 'Connection failed: ${_safeError(error)}');
       rethrow;
@@ -455,6 +435,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _transitioning = true;
     _setConnection(switching ? 'switching' : 'restarting', server);
     try {
+      await _remoteAccess.requireAllowed();
       await _host.stopXray();
       await _collectCoreLogs();
       _warnUnsupportedProfileFeatures(server);
@@ -478,6 +459,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
+      if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
       _setConnection('error', server, error: _safeError(error));
       rethrow;
     } finally {
@@ -883,6 +865,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   @override
   Future<void> openTelegram() async {
+    if (_buildConfig.isEmpty) {
+      _buildConfig = Map<String, Object?>.from(await _host.getBuildConfig());
+    }
     final value = Uri.tryParse(_telegramUrl);
     if (value == null ||
         !const {'https', 'tg'}.contains(value.scheme.toLowerCase())) {
@@ -1069,6 +1054,24 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
+  Future<bool> _enforceBlockedAccess(
+    Object error, {
+    bool cleanup = true,
+  }) async {
+    if (error is! DeviceAccessException ||
+        error.reason != 'blocked_by_administrator') {
+      return false;
+    }
+    _expectXray = false;
+    _monitor?.cancel();
+    if (cleanup) await _bestEffortCleanup();
+    _connection = _disconnectedConnection();
+    _emit('connectionState', _connection);
+    _emit('accessBlocked', {'reason': error.reason, 'message': error.message});
+    _log('warning', 'Remote access was blocked; Core and proxies stopped');
+    return true;
+  }
+
   Future<void> _assertLocalProxyPortsAvailable() async {
     final ports = {_localSocksPort, _localHttpPort};
     if (ports.length != 2) {
@@ -1108,7 +1111,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   void _scheduleSubscriptionUpdates() {
     _subscriptionTimer?.cancel();
-    if (_settings['autoUpdate'] != true || _subscriptionUrl.isEmpty) return;
+    if (_settings['autoUpdate'] != true) return;
     final hours = _integerSetting('updateIntervalHours', 12);
     final interval = Duration(hours: hours);
     _subscriptionTimer = Timer.periodic(interval, (_) {
@@ -1179,7 +1182,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'logs': List<Map<String, Object?>>.unmodifiable(_logs),
     'coreVersion': _coreVersion,
     'appVersion': _appVersion,
-    'subscriptionConfigured': _subscriptionUrl.isNotEmpty,
+    'subscriptionConfigured': true,
     'telegramEligible': _telegramEligible,
     'subscriptionError': _subscriptionError,
     'deletedServerCount': _deletedCount,
@@ -1319,8 +1322,6 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   int get _deletedCount =>
       _servers.where((server) => _hiddenIds.contains(server.id)).length;
 
-  String get _subscriptionUrl =>
-      '${_buildConfig['subscriptionUrl'] ?? ''}'.trim();
   String get _telegramUrl => '${_buildConfig['telegramUrl'] ?? ''}'.trim();
 
   bool get _telegramEligible {

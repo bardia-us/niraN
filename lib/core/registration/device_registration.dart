@@ -3,6 +3,21 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+
+final deviceAccessBlock = ValueNotifier<String?>(null);
+
+void markDeviceAccessBlocked([String? message]) {
+  deviceAccessBlock.value = message?.trim().isNotEmpty == true
+      ? message!.trim()
+      : 'blocked_by_administrator';
+}
+
+void clearDeviceAccessBlocked() {
+  deviceAccessBlock.value = null;
+}
+
 const deviceRegistrationEndpoint = 'https://neovip.ir/apiniraN/api.php';
 const _currentConsentVersion = 2;
 
@@ -10,6 +25,28 @@ abstract interface class DeviceRegistrationCoordinator {
   Future<bool> initialize();
   Future<void> accept();
   Future<void> exitApplication();
+}
+
+abstract interface class RemoteAccessController {
+  Future<void> requireAllowed();
+  Future<RemoteSubscription> fetchSubscription();
+}
+
+final class RemoteSubscription {
+  const RemoteSubscription(this.bytes, this.usageHeader);
+
+  final List<int> bytes;
+  final String? usageHeader;
+}
+
+final class DeviceAccessException implements IOException {
+  const DeviceAccessException(this.reason, this.message);
+
+  final String reason;
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 abstract interface class DeviceRegistrationInfoProvider {
@@ -23,12 +60,30 @@ final class DeviceRegistrationInfo {
     required this.windowsUsername,
     required this.windowsVersion,
     required this.appVersion,
+    this.systemId = '',
+    this.systemIdSource = 'unknown',
   });
 
   final String deviceName;
   final String windowsUsername;
   final String windowsVersion;
   final String appVersion;
+  final String systemId;
+  final String systemIdSource;
+}
+
+String deriveWindowsDeviceKey(String systemId) {
+  final normalized = systemId.trim().toLowerCase();
+  if (!RegExp(r'^[0-9a-f]{32,256}$').hasMatch(normalized) ||
+      normalized.length.isOdd) {
+    throw const DeviceAccessException(
+      'device_identity_unavailable',
+      'A stable Windows device identity is unavailable',
+    );
+  }
+  return sha256
+      .convert(utf8.encode('niraN-device-key-v1\u0000windows\u0000$normalized'))
+      .toString();
 }
 
 abstract interface class DeviceRegistrationTransport {

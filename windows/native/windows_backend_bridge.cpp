@@ -9,6 +9,8 @@
 #include <shellapi.h>
 #include <windows.h>
 #include <security.h>
+#include <winrt/Windows.Security.Cryptography.h>
+#include <winrt/Windows.System.Profile.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -208,6 +210,35 @@ std::wstring WindowsVersion() {
   return value.str();
 }
 
+std::pair<std::string, std::string> WindowsPublisherSystemIdentity() {
+  try {
+    const auto info =
+        winrt::Windows::System::Profile::SystemIdentification::
+            GetSystemIdForPublisher();
+    if (!info || !info.Id()) return {};
+    const auto encoded =
+        winrt::Windows::Security::Cryptography::CryptographicBuffer::
+            EncodeToHexString(info.Id());
+    std::string source = "unknown";
+    switch (info.Source()) {
+      case winrt::Windows::System::Profile::SystemIdentificationSource::Tpm:
+        source = "tpm";
+        break;
+      case winrt::Windows::System::Profile::SystemIdentificationSource::Uefi:
+        source = "uefi";
+        break;
+      case winrt::Windows::System::Profile::SystemIdentificationSource::Registry:
+        source = "registry";
+        break;
+      default:
+        break;
+    }
+    return {Utf8(std::wstring(encoded.c_str(), encoded.size())), source};
+  } catch (const winrt::hresult_error&) {
+    return {};
+  }
+}
+
 }  // namespace
 
 WindowsBackendBridge::WindowsBackendBridge(flutter::BinaryMessenger* messenger,
@@ -298,8 +329,6 @@ void WindowsBackendBridge::HandleMethodCall(
   const std::string& method = call.method_name();
   if (method == "getBuildConfig") {
     flutter::EncodableMap values;
-    values[flutter::EncodableValue("subscriptionUrl")] =
-        flutter::EncodableValue(Utf8(private_config::kSubscriptionUrl));
     values[flutter::EncodableValue("telegramUrl")] =
         flutter::EncodableValue(Utf8(private_config::kTelegramUrl));
     values[flutter::EncodableValue("telegramContact")] =
@@ -310,6 +339,8 @@ void WindowsBackendBridge::HandleMethodCall(
     return;
   }
   if (method == "getDeviceRegistrationInfo") {
+    const auto [system_id, system_id_source] =
+        WindowsPublisherSystemIdentity();
     flutter::EncodableMap values;
     values[flutter::EncodableValue("deviceName")] =
         flutter::EncodableValue(Utf8(DeviceName()));
@@ -319,6 +350,10 @@ void WindowsBackendBridge::HandleMethodCall(
         flutter::EncodableValue(Utf8(WindowsVersion()));
     values[flutter::EncodableValue("appVersion")] =
         flutter::EncodableValue(FLUTTER_VERSION);
+    values[flutter::EncodableValue("systemId")] =
+        flutter::EncodableValue(system_id);
+    values[flutter::EncodableValue("systemIdSource")] =
+        flutter::EncodableValue(system_id_source);
     result->Success(flutter::EncodableValue(values));
     return;
   }

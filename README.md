@@ -12,6 +12,8 @@ from Windows System Proxy and native Xray TUN.
 - Native Xray TUN (administrator privileges required)
 - Real Delay through a temporary per-server proxy
 - Routing, DNS, subscription updates, logs, themes, and Persian/English UI
+- Consent-gated server-side Block/Unblock enforcement before startup,
+  subscription refresh, automatic refresh, and Connect
 - System tray lifecycle: closing the window keeps Core running; Tray > Exit
   performs the final cleanup
 
@@ -21,6 +23,19 @@ The repository contains the Flutter client, Win32 bridge, reproducible Xray and
 Wintun provisioning scripts, and the optional device-registry server files.
 Machine-local inputs and generated artifacts are excluded from source control.
 Runnable Windows bundles are published only through GitHub Releases.
+
+The private subscription URL is not embedded in niraN 0.3.1. Deploy the shared
+files in `server/apiniraN/` and configure the upstream only on the server as
+`NIRAN_WINDOWS_SUBSCRIPTION_UPSTREAM`. Migration and old-client limitations are
+documented in `server/apiniraN/DEPLOYMENT.md`.
+
+Build a local x64 bundle with:
+
+```powershell
+flutter analyze
+flutter test
+flutter build windows --release
+```
 
 ## License notices
 

@@ -38,6 +38,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "wininet.lib" "advapi32.lib" "shell32.lib" "secur32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
 # Flutter-generated headers are rooted at windows/, while native bridge
 # headers use paths rooted at the Flutter project directory.
 target_include_directories(${BINARY_NAME} PRIVATE
@@ -64,7 +65,6 @@ function(NIRAN_PRIVATE_INPUT INPUT_NAME OUTPUT_NAME)
   set(${OUTPUT_NAME} "${INPUT_VALUE}" PARENT_SCOPE)
 endfunction()
 
-NIRAN_PRIVATE_INPUT("NIRANG_SUBSCRIPTION_URL" NIRAN_SUBSCRIPTION_URL)
 NIRAN_PRIVATE_INPUT("NIRANG_TELEGRAM_URL" NIRAN_TELEGRAM_URL)
 NIRAN_PRIVATE_INPUT("NIRANG_TELEGRAM_CONTACT" NIRAN_TELEGRAM_CONTACT)
 configure_file("private_config.h.in" "${CMAKE_CURRENT_BINARY_DIR}/private_config.h" @ONLY)

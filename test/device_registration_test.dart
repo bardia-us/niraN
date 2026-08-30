@@ -8,6 +8,8 @@ import 'package:niran/core/registration/device_registration.dart';
 import 'package:niran/features/registration/registration_bootstrap.dart';
 
 void main() {
+  tearDown(clearDeviceAccessBlocked);
+
   test(
     'registration is consent-gated and persists a random installation id',
     () async {
@@ -135,6 +137,43 @@ void main() {
     expect(coordinator.accepts, 1);
     expect(find.text('HOME_READY'), findsOneWidget);
   });
+
+  testWidgets('blocked startup shows support page instead of loading', (
+    tester,
+  ) async {
+    final coordinator = _FakeCoordinator()..blocked = true;
+    await tester.pumpWidget(
+      NiranRegistrationBootstrap(
+        coordinator: coordinator,
+        child: const MaterialApp(home: Text('HOME_READY')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME_READY'), findsNothing);
+    expect(find.text('Access blocked'), findsOneWidget);
+    expect(find.textContaining('دسترسی شما مسدود شده است'), findsOneWidget);
+    expect(find.text('Telegram'), findsOneWidget);
+  });
+
+  testWidgets('runtime block replaces the Windows app immediately', (
+    tester,
+  ) async {
+    final coordinator = _FakeCoordinator()..accepted = true;
+    await tester.pumpWidget(
+      NiranRegistrationBootstrap(
+        coordinator: coordinator,
+        child: const MaterialApp(home: Text('HOME_READY')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('HOME_READY'), findsOneWidget);
+
+    markDeviceAccessBlocked();
+    await tester.pumpAndSettle();
+    expect(find.text('HOME_READY'), findsNothing);
+    expect(find.text('Access blocked'), findsOneWidget);
+  });
 }
 
 Future<void> _waitFor(bool Function() condition) async {
@@ -176,12 +215,25 @@ final class _RecordingTransport implements DeviceRegistrationTransport {
 
 final class _FakeCoordinator implements DeviceRegistrationCoordinator {
   int accepts = 0;
+  bool accepted = false;
+  bool blocked = false;
 
   @override
-  Future<bool> initialize() async => false;
+  Future<bool> initialize() async {
+    if (blocked) {
+      throw const DeviceAccessException(
+        'blocked_by_administrator',
+        'This Windows device has been blocked by the administrator',
+      );
+    }
+    return accepted;
+  }
 
   @override
-  Future<void> accept() async => accepts++;
+  Future<void> accept() async {
+    accepts++;
+    accepted = true;
+  }
 
   @override
   Future<void> exitApplication() async {}

@@ -16,6 +16,8 @@ final class WindowsDeviceRegistrationInfoProvider
       windowsUsername: '${values['windowsUsername'] ?? ''}',
       windowsVersion: '${values['windowsVersion'] ?? ''}',
       appVersion: '${values['appVersion'] ?? ''}',
+      systemId: '${values['systemId'] ?? ''}',
+      systemIdSource: '${values['systemIdSource'] ?? 'unknown'}',
     );
   }
 

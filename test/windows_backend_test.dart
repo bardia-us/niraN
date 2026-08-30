@@ -9,6 +9,7 @@ import 'package:niran/platform/windows/windows_real_delay.dart';
 import 'package:niran/platform/windows/windows_server_record.dart';
 import 'package:niran/platform/windows/windows_subscription_parser.dart';
 import 'package:niran/platform/windows/windows_xray_config_builder.dart';
+import 'package:niran/core/registration/device_registration.dart';
 
 void main() {
   const parser = WindowsSubscriptionParser();
@@ -343,6 +344,7 @@ void main() {
       try {
         await _seedConnectableServer(directory);
         backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
           localPortPreflight: (_) async {},
           host: host,
           dataDirectory: directory,
@@ -366,6 +368,7 @@ void main() {
     );
     try {
       final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: _FakeWindowsHost(),
@@ -375,7 +378,7 @@ void main() {
 
       expect(bootstrap['appVersion'], '0.1.0');
       expect(bootstrap['coreVersion'], 'v26.7.28');
-      expect(bootstrap['subscriptionConfigured'], isFalse);
+      expect(bootstrap['subscriptionConfigured'], isTrue);
       expect((bootstrap['settings'] as Map)['connectionMode'], 'proxy');
     } finally {
       await directory.delete(recursive: true);
@@ -391,6 +394,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -420,6 +424,83 @@ void main() {
     }
   });
 
+  test('server block is enforced again before Connect', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-blocked-connect-test-',
+    );
+    final host = _FakeWindowsHost();
+    final access = _AllowedRemoteAccess();
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: access,
+        autoStartCore: false,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+      );
+      await backend.initialize();
+      access.failure = const DeviceAccessException(
+        'blocked_by_administrator',
+        'This Windows device has been blocked by the administrator',
+      );
+
+      await expectLater(
+        backend.connect('server'),
+        throwsA(isA<DeviceAccessException>()),
+      );
+      expect(host.calls, isNot(contains('start')));
+      expect(access.checks, 2);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test(
+    'block discovered during refresh stops Core and emits access gate',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-blocked-refresh-test-',
+      );
+      final host = _FakeWindowsHost();
+      final access = _AllowedRemoteAccess();
+      final events = <Map<dynamic, dynamic>>[];
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: access,
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+          proxyReadinessProbe: (_) async {},
+        );
+        await backend.initialize();
+        final subscription = backend.events.listen(events.add);
+        addTearDown(subscription.cancel);
+        await backend.connect('server');
+        host.calls.clear();
+        access.failure = const DeviceAccessException(
+          'blocked_by_administrator',
+          'This Windows device has been blocked by the administrator',
+        );
+
+        await expectLater(
+          backend.refreshSubscription(),
+          throwsA(isA<DeviceAccessException>()),
+        );
+        expect(host.calls, containsAllInOrder(['disable', 'stop']));
+        expect(events.any((event) => event['type'] == 'accessBlocked'), isTrue);
+        expect(
+          (await backend.initialize())['connection'],
+          containsPair('state', 'disconnected'),
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
   test('Windows TUN lifecycle never changes System Proxy', () async {
     final directory = await Directory.systemTemp.createTemp(
       'niraN-tun-lifecycle-test-',
@@ -428,6 +509,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -460,6 +542,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -495,6 +578,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -542,6 +626,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -576,6 +661,7 @@ void main() {
     try {
       await _seedConnectableServer(directory);
       final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
         host: host,
@@ -788,5 +874,22 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   @override
   Future<void> stopSpeedtestXray() async {
     calls.add('stopSpeedtest');
+  }
+}
+
+final class _AllowedRemoteAccess implements RemoteAccessController {
+  int checks = 0;
+  DeviceAccessException? failure;
+
+  @override
+  Future<void> requireAllowed() async {
+    checks++;
+    if (failure case final error?) throw error;
+  }
+
+  @override
+  Future<RemoteSubscription> fetchSubscription() async {
+    await requireAllowed();
+    return const RemoteSubscription([], null);
   }
 }
