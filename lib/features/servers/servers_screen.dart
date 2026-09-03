@@ -48,8 +48,9 @@ class ServersScreen extends ConsumerWidget {
                   padding: const EdgeInsets.only(top: headerHeight + 10),
                   child: _EmptyServers(app: app),
                 )
-              : ListView.separated(
+              : ReorderableListView.builder(
                   cacheExtent: 360,
+                  buildDefaultDragHandles: false,
                   itemCount: app.servers.length,
                   padding: const EdgeInsets.fromLTRB(
                     8,
@@ -57,98 +58,119 @@ class ServersScreen extends ConsumerWidget {
                     8,
                     16,
                   ),
-                  separatorBuilder: (_, _) => const SizedBox(height: 5),
+                  onReorder: (oldIndex, newIndex) => _perform(
+                    context,
+                    () => controller.reorderServers(oldIndex, newIndex),
+                  ),
+                  proxyDecorator: (child, index, animation) => Material(
+                    color: Colors.transparent,
+                    elevation: view.performanceMode ? 0 : 2,
+                    borderRadius: BorderRadius.circular(13),
+                    child: child,
+                  ),
                   itemBuilder: (context, index) {
                     final server = app.servers[index];
                     final brightness = Theme.of(context).brightness;
-                    return RepaintBoundary(
+                    return Padding(
                       key: ValueKey('${brightness.name}:${server.id}'),
-                      child: InteractiveDepth(
-                        radius: 13,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onSecondaryTapDown: (details) =>
-                              _serverContextActions(
-                                context,
-                                controller,
-                                server,
-                                details.globalPosition,
+                      padding: const EdgeInsets.only(bottom: 5),
+                      child: RepaintBoundary(
+                        child: InteractiveDepth(
+                          radius: 13,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onSecondaryTapDown: (details) =>
+                                _serverContextActions(
+                                  context,
+                                  controller,
+                                  server,
+                                  details.globalPosition,
+                                ),
+                            child: AnimatedContainer(
+                              duration: Duration(
+                                milliseconds: view.performanceMode ? 85 : 140,
                               ),
-                          child: AnimatedContainer(
-                            duration: Duration(
-                              milliseconds: view.performanceMode ? 85 : 140,
-                            ),
-                            curve: Curves.easeOutCubic,
-                            decoration: BoxDecoration(
-                              color: server.selected
-                                  ? Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer
-                                        .withValues(alpha: .26)
-                                  : Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerLow
-                                        .withValues(alpha: .42),
-                              borderRadius: BorderRadius.circular(13),
-                              border: Border.all(
+                              curve: Curves.easeOutCubic,
+                              decoration: BoxDecoration(
                                 color: server.selected
-                                    ? Theme.of(context).colorScheme.primary
-                                          .withValues(alpha: .28)
+                                    ? Theme.of(context)
+                                          .colorScheme
+                                          .primaryContainer
+                                          .withValues(alpha: .26)
                                     : Theme.of(context)
                                           .colorScheme
-                                          .outlineVariant
-                                          .withValues(alpha: .22),
+                                          .surfaceContainerLow
+                                          .withValues(alpha: .42),
+                                borderRadius: BorderRadius.circular(13),
+                                border: Border.all(
+                                  color: server.selected
+                                      ? Theme.of(context).colorScheme.primary
+                                            .withValues(alpha: .28)
+                                      : Theme.of(context)
+                                            .colorScheme
+                                            .outlineVariant
+                                            .withValues(alpha: .22),
+                                ),
                               ),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(13),
-                              child: Material(
-                                type: MaterialType.transparency,
-                                child: ListTile(
-                                  splashColor: Theme.of(
-                                    context,
-                                  ).colorScheme.primary.withValues(alpha: .10),
-                                  leading: _SelectionIndicator(
-                                    selected: server.selected,
-                                    reducedEffects: view.performanceMode,
-                                  ),
-                                  title: _ServerTitle(server: server),
-                                  subtitle: Text(
-                                    '${server.protocol}  ${server.transport}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _Latency(server: server),
-                                      Builder(
-                                        builder: (buttonContext) => IconButton(
-                                          tooltip: context.s('serverActions'),
-                                          onPressed: () => _serverActions(
-                                            context,
-                                            controller,
-                                            server,
-                                            _menuPosition(buttonContext),
-                                          ),
-                                          icon: const Icon(
-                                            Icons.more_vert_rounded,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(13),
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: ListTile(
+                                    splashColor: Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: .10),
+                                    leading: _SelectionIndicator(
+                                      selected: server.selected,
+                                      reducedEffects: view.performanceMode,
+                                    ),
+                                    title: _ServerTitle(server: server),
+                                    subtitle: Text(
+                                      '${server.protocol}  ${server.transport}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _Latency(server: server),
+                                        ReorderableDragStartListener(
+                                          index: index,
+                                          child: Tooltip(
+                                            message: 'Drag to reorder',
+                                            child: const Padding(
+                                              padding: EdgeInsets.all(8),
+                                              child: Icon(
+                                                Icons.drag_indicator_rounded,
+                                                size: 20,
+                                              ),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  onTap: () => _perform(
-                                    context,
-                                    () => controller.selectServer(server.id),
-                                  ),
-                                  onLongPress: () => _serverActions(
-                                    context,
-                                    controller,
-                                    server,
-                                    MediaQuery.sizeOf(
+                                        Builder(
+                                          builder: (buttonContext) =>
+                                              IconButton(
+                                                tooltip: context.s(
+                                                  'serverActions',
+                                                ),
+                                                onPressed: () => _serverActions(
+                                                  context,
+                                                  controller,
+                                                  server,
+                                                  _menuPosition(buttonContext),
+                                                ),
+                                                icon: const Icon(
+                                                  Icons.more_vert_rounded,
+                                                ),
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                    onTap: () => _perform(
                                       context,
-                                    ).center(Offset.zero),
+                                      () => controller.selectServer(server.id),
+                                    ),
                                   ),
                                 ),
                               ),

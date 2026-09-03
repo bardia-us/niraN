@@ -129,8 +129,24 @@ final class WindowsServerRecord {
         _queryBool(parameters['allowInsecure']) ||
         _queryBool(parameters['insecure']) ||
         _queryBool(parameters['allow_insecure']),
-    'credentialLabel': protocol.toLowerCase() == 'trojan' ? 'Password' : 'UUID',
-    'credentialMasked': protocol.toLowerCase() == 'trojan'
+    'credentialLabel':
+        const {
+          'trojan',
+          'shadowsocks',
+          'hysteria2',
+        }.contains(protocol.toLowerCase())
+        ? 'Password'
+        : const {'socks', 'http'}.contains(protocol.toLowerCase())
+        ? 'Credentials'
+        : 'UUID',
+    'credentialMasked':
+        const {
+          'trojan',
+          'shadowsocks',
+          'hysteria2',
+          'socks',
+          'http',
+        }.contains(protocol.toLowerCase())
         ? '••••••••••••'
         : '********-****-****-****-************',
     'realityPublicKeyMasked': (parameters['pbk'] ?? '').isEmpty

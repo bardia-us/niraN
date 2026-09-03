@@ -10,6 +10,7 @@ abstract interface class NiranPlatformBackend {
   Future<Map<dynamic, dynamic>> initialize();
   Future<Map<dynamic, dynamic>> refreshSubscription();
   Future<List<dynamic>> selectServer(String id);
+  Future<List<dynamic>> reorderServers(List<String> ids);
   Future<List<dynamic>> updateServerProfile(
     String id,
     Map<String, String> values,
@@ -31,6 +32,7 @@ abstract interface class NiranPlatformBackend {
   Future<void> clearLogs();
   Future<void> openTelegram();
   Future<void> openExternalUrl(String url);
+  Future<void> exitApplication();
   Future<void> recordTelegramDecision(String decision);
   Future<void> recordFlutterError(String message);
 }

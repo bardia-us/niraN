@@ -84,6 +84,26 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     }
   }
 
+  Future<void> reorderServers(int oldIndex, int newIndex) async {
+    final previous = _current?.servers ?? const <ServerInfo>[];
+    if (oldIndex < 0 || oldIndex >= previous.length) return;
+    final target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    if (target < 0 || target >= previous.length || target == oldIndex) return;
+    final reordered = List<ServerInfo>.of(previous);
+    final item = reordered.removeAt(oldIndex);
+    reordered.insert(target, item);
+    _set((value) => value.copyWith(servers: List.unmodifiable(reordered)));
+    try {
+      final servers = await NirangNative.reorderServers(
+        reordered.map((server) => server.id).toList(growable: false),
+      );
+      _set((value) => value.copyWith(servers: _servers(servers)));
+    } catch (_) {
+      _set((value) => value.copyWith(servers: previous));
+      rethrow;
+    }
+  }
+
   Future<void> updateServerProfile(
     String id,
     Map<String, String> values,
@@ -195,6 +215,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   Future<void> openTelegram() => NirangNative.openTelegram();
   Future<void> openExternalUrl(Uri url) =>
       NirangNative.openExternalUrl(url.toString());
+  Future<void> exitApplication() => NirangNative.exitApplication();
 
   Future<void> recordTelegramDecision(String decision) async {
     await NirangNative.recordTelegramDecision(decision);
@@ -281,7 +302,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     logs: _logs(map['logs'] as List<dynamic>? ?? const []),
     lastUpdated: _number(map['lastUpdated']),
     coreVersion: '${map['coreVersion'] ?? 'Unavailable'}',
-    appVersion: '${map['appVersion'] ?? '0.3.1'}',
+    appVersion: '${map['appVersion'] ?? '0.3.3'}',
     subscriptionConfigured: map['subscriptionConfigured'] == true,
     telegramEligible: map['telegramEligible'] == true,
     subscriptionError: map['subscriptionError']?.toString(),

@@ -6,6 +6,7 @@ import '../../core/localization/app_strings.dart';
 import '../../core/widgets/glass_dialog.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/update_checker.dart';
+import '../../core/windows_update_manager.dart';
 import '../vpn/app_controller.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -17,6 +18,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _checkingUpdates = false;
+  bool _updateManagerInitialized = false;
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +31,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.1',
+          appVersion: app?.appVersion ?? '0.3.3',
         );
       }),
     );
@@ -43,6 +45,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     final settings = app.settings;
     final controller = ref.read(appControllerProvider.notifier);
+    if (!_updateManagerInitialized && app.appVersion.isNotEmpty) {
+      _updateManagerInitialized = true;
+      WindowsUpdateManager.instance.initialize(app.appVersion);
+    }
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [
@@ -530,6 +536,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ? null
               : () => _checkForUpdates(context, controller, app.appVersion),
         ),
+        _UpdateDownloadTile(controller: controller),
         const Divider(indent: 56),
         _Header(context.s('settings')),
         ListTile(
@@ -615,7 +622,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ).showSnackBar(SnackBar(content: Text(context.s('upToDate'))));
         return;
       }
-      final viewRelease = await showDialog<bool>(
+      final action = await showDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           icon: const Icon(Icons.new_releases_outlined),
@@ -623,20 +630,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           content: Text('${release.latestVersion}'),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(context.s('later')),
+              onPressed: () => Navigator.pop(dialogContext, 'browser'),
+              child: const Text('Download with browser'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(context.s('viewRelease')),
+              onPressed: release.windowsAsset?.sha256 == null
+                  ? null
+                  : () => Navigator.pop(dialogContext, 'inside'),
+              child: const Text('Download in niraN'),
             ),
           ],
         ),
       );
-      if (viewRelease == true && context.mounted) {
+      if (action == 'inside' && release.windowsAsset != null) {
+        await WindowsUpdateManager.instance.start(
+          release.windowsAsset!,
+          release.latestVersion,
+        );
+      } else if (action == 'browser' && context.mounted) {
         await _perform(
           context,
-          () => controller.openExternalUrl(release.releaseUrl),
+          () => controller.openExternalUrl(
+            release.windowsAsset?.url ?? release.releaseUrl,
+          ),
         );
       }
     } catch (_) {
@@ -1152,6 +1168,73 @@ bool _validRuleText(String value) =>
     !value.runes.any(
       (code) => code < 32 && code != 9 && code != 10 && code != 13,
     );
+
+class _UpdateDownloadTile extends StatelessWidget {
+  const _UpdateDownloadTile({required this.controller});
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: WindowsUpdateManager.instance,
+    builder: (context, _) {
+      final manager = WindowsUpdateManager.instance;
+      final value = manager.snapshot;
+      if (value.status == UpdateDownloadStatus.idle) {
+        return const SizedBox.shrink();
+      }
+      final received = formatBytes(value.received);
+      final total = value.total > 0 ? formatBytes(value.total) : 'Unknown';
+      return ListTile(
+        leading: Icon(switch (value.status) {
+          UpdateDownloadStatus.ready => Icons.download_done_rounded,
+          UpdateDownloadStatus.failed => Icons.error_outline_rounded,
+          _ => Icons.downloading_rounded,
+        }),
+        title: Text('Update download · ${value.version}'),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(value.error ?? '$received / $total'),
+            if (value.status == UpdateDownloadStatus.downloading)
+              LinearProgressIndicator(value: value.progress),
+          ],
+        ),
+        trailing: Wrap(
+          spacing: 2,
+          children: [
+            if (value.status == UpdateDownloadStatus.downloading)
+              IconButton(
+                tooltip: 'Pause',
+                onPressed: manager.pause,
+                icon: const Icon(Icons.pause_rounded),
+              ),
+            if (value.status == UpdateDownloadStatus.paused ||
+                value.status == UpdateDownloadStatus.failed)
+              IconButton(
+                tooltip: 'Resume',
+                onPressed: manager.resume,
+                icon: const Icon(Icons.play_arrow_rounded),
+              ),
+            if (value.status == UpdateDownloadStatus.ready)
+              IconButton(
+                tooltip: 'Open update',
+                onPressed: () => _perform(context, () async {
+                  final mustExit = await manager.launch();
+                  if (mustExit) await controller.exitApplication();
+                }),
+                icon: const Icon(Icons.install_desktop_rounded),
+              ),
+            IconButton(
+              tooltip: 'Delete',
+              onPressed: manager.delete,
+              icon: const Icon(Icons.delete_outline_rounded),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
 
 final _hostnameRule = RegExp(
   r'^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$',

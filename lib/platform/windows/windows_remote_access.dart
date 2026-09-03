@@ -65,7 +65,7 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
         ..followRedirects = false
         ..headers.contentType = ContentType.json
         ..headers.set(HttpHeaders.acceptHeader, 'application/json, text/plain')
-        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.1');
+        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.3');
       if (token != null) {
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       }
@@ -183,7 +183,18 @@ final class WindowsRemoteAccessService
 
   @override
   Future<RemoteSubscription> fetchSubscription() async {
-    await requireAllowed();
+    await _load();
+    if (_record?['consent_accepted'] != true ||
+        _record?['consent_version'] != _consentVersion) {
+      throw const DeviceAccessException(
+        'consent_required',
+        'Device registration consent is required',
+      );
+    }
+    // The protected subscription request performs the authoritative access
+    // check itself, so do not issue a redundant status request immediately
+    // before it. Missing credentials still require registration.
+    if (_token == null) await _register();
     var response = await _transport.send(
       _authorizedPayload('subscription'),
       token: _token,
@@ -258,7 +269,7 @@ final class WindowsRemoteAccessService
       'device_name': _clean(info.deviceName, 'Windows PC'),
       'windows_username': _clean(info.windowsUsername, 'Unknown user'),
       'windows_version': _clean(info.windowsVersion, 'Windows'),
-      'app_version': _clean(info.appVersion, '0.3.1'),
+      'app_version': _clean(info.appVersion, '0.3.3'),
       'last_seen': _now(),
     };
     _record = updated;

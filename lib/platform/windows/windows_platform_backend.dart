@@ -11,6 +11,7 @@ import 'windows_native_host.dart';
 import 'windows_real_delay.dart';
 import 'windows_remote_access.dart';
 import 'windows_server_record.dart';
+import 'windows_server_order_policy.dart';
 import 'windows_subscription_parser.dart';
 import 'windows_xray_config_builder.dart';
 
@@ -34,7 +35,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.1';
+  static const _appVersionFallback = '0.3.3';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -48,11 +49,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
   final _configBuilder = const WindowsXrayConfigBuilder();
+  final _orderPolicy = const WindowsServerOrderPolicy();
 
   List<WindowsServerRecord> _servers = [];
   WindowsSubscriptionUsage _usage = const WindowsSubscriptionUsage();
   final Set<String> _hiddenIds = {};
   final Map<String, Map<String, String>> _profileOverrides = {};
+  List<String> _manualOrderIds = [];
   final List<Map<String, Object?>> _logs = [];
   Map<String, Object?> _settings = _defaultSettings();
   Map<String, Object?> _buildConfig = {};
@@ -87,12 +90,15 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (_initialized) return _bootstrap();
     if (_traySubscription?.isPaused == true) _traySubscription?.resume();
     await _dataDirectory.create(recursive: true);
-    final recovered = await _host.recoverSystemProxy();
-    if (await _xrayConfigFile.exists()) {
-      await _xrayConfigFile.delete();
-    }
-    await _loadState();
-    await _loadSubscriptionCache();
+    final recoveredFuture = _host.recoverSystemProxy();
+    await Future.wait([
+      _loadState(),
+      _loadSubscriptionCache(),
+      (() async {
+        if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
+      })(),
+    ]);
+    final recovered = await recoveredFuture;
     _buildConfig = Map<String, Object?>.from(await _host.getBuildConfig());
     _appVersion = '${_buildConfig['appVersion'] ?? _appVersionFallback}';
     try {
@@ -150,13 +156,38 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       if (remote.bytes.length > _maxSubscriptionBytes) {
         throw const HttpException('Subscription response is too large');
       }
-      final parsed = _parser.parse(utf8.decode(remote.bytes));
-      if (parsed.isEmpty) {
+      final result = _parser.parseDetailed(utf8.decode(remote.bytes));
+      if (result.records.isEmpty) {
         throw const FormatException(
           'Subscription contains no supported servers',
         );
       }
-      _servers = parsed.map(_applyProfileOverride).toList(growable: false);
+      final previousServers = _servers;
+      final previouslySelected = _server(_selectedId ?? '');
+      final refreshed = result.records
+          .map(_applyProfileOverride)
+          .toList(growable: false);
+      _servers = _orderPolicy.reconcile(
+        preferredIds: _manualOrderIds,
+        previous: previousServers,
+        refreshed: refreshed,
+      );
+      if (_manualOrderIds.isNotEmpty) {
+        _manualOrderIds = _servers.map((server) => server.id).toList();
+      }
+      if (previouslySelected != null &&
+          !_servers.any((server) => server.id == _selectedId)) {
+        final matches = _servers.where(
+          (server) =>
+              server.protocol.toLowerCase() ==
+                  previouslySelected.protocol.toLowerCase() &&
+              server.address.toLowerCase() ==
+                  previouslySelected.address.toLowerCase() &&
+              server.port == previouslySelected.port &&
+              server.credential == previouslySelected.credential,
+        );
+        if (matches.length == 1) _selectedId = matches.single.id;
+      }
       _usage = WindowsSubscriptionUsage.fromHeader(remote.usageHeader);
       _lastUpdated = DateTime.now().millisecondsSinceEpoch;
       _hiddenIds.clear();
@@ -164,7 +195,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _ensureSelection();
       await _persistSubscriptionCache();
       await _persistState();
-      _log('info', 'Subscription updated');
+      _log(
+        'info',
+        'Subscription replaced authoritatively: ${_servers.length} supported, '
+            '${result.failedEntries} malformed, ${result.unsupportedEntries} unsupported',
+      );
       final data = <String, Object?>{
         'servers': _safeServers(),
         'usage': _usage.toMap(),
@@ -201,6 +236,25 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _emit('servers', servers);
     if (switching) _log('info', 'Server switched');
     return servers;
+  }
+
+  @override
+  Future<List<dynamic>> reorderServers(List<String> ids) async {
+    final visible = _visibleServers;
+    final visibleIds = visible.map((server) => server.id).toSet();
+    if (ids.length != visible.length ||
+        ids.toSet().length != ids.length ||
+        !ids.toSet().containsAll(visibleIds)) {
+      throw _platformError('invalid_order', 'Server order is invalid');
+    }
+    final byId = {for (final server in _servers) server.id: server};
+    final hidden = _servers.where((server) => _hiddenIds.contains(server.id));
+    _servers = [for (final id in ids) byId[id]!, ...hidden];
+    _manualOrderIds = List<String>.of(ids);
+    await Future.wait([_persistState(), _persistSubscriptionCache()]);
+    final safe = _safeServers();
+    _emit('servers', safe);
+    return safe;
   }
 
   @override
@@ -366,20 +420,27 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _monitor?.cancel();
     Object? failure;
     try {
-      try {
-        await _host.disableSystemProxy();
-      } on Object catch (error) {
-        failure = error;
-      }
-      try {
-        await _host.stopXray();
-      } on Object catch (error) {
-        failure ??= error;
-      }
+      await Future.wait([
+        (() async {
+          try {
+            await _host.disableSystemProxy();
+          } on Object catch (error) {
+            failure = error;
+          }
+        })(),
+        (() async {
+          try {
+            await _host.stopXray();
+          } on Object catch (error) {
+            failure ??= error;
+          }
+        })(),
+      ]);
       await _collectCoreLogs();
       await _syncSystemProxyState();
       if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
-      if (failure == null) {
+      final disconnectFailure = failure;
+      if (disconnectFailure == null) {
         _connection = _disconnectedConnection();
         _emit('connectionState', _connection);
         _log('info', 'Disconnected; Core/TUN stopped and proxy restored');
@@ -387,9 +448,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         _setConnection(
           'error',
           _activeServer,
-          error: 'Disconnect cleanup failed: ${_safeError(failure)}',
+          error: 'Disconnect cleanup failed: ${_safeError(disconnectFailure)}',
         );
-        throw failure;
+        throw disconnectFailure;
       }
     } finally {
       _transitioning = false;
@@ -895,6 +956,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
+  Future<void> exitApplication() => _host.exitApplication();
+
+  @override
   Future<void> recordTelegramDecision(String decision) async {
     _settings['telegramNever'] = decision == 'never';
     _settings['telegramLastShown'] = DateTime.now().millisecondsSinceEpoch;
@@ -1199,6 +1263,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         ..addAll(
           (payload['hiddenIds'] as List? ?? const []).map((id) => '$id'),
         );
+      _manualOrderIds = (payload['manualOrderIds'] as List? ?? const [])
+          .map((id) => '$id')
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
       final overrides = payload['profileOverrides'];
       if (overrides is Map) {
         _profileOverrides
@@ -1262,6 +1330,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'selectedId': _selectedId,
     'hiddenIds': _hiddenIds.toList(growable: false),
     'profileOverrides': _profileOverrides,
+    'manualOrderIds': _manualOrderIds,
     'settings': _settings,
     'openCount': _openCount,
   });

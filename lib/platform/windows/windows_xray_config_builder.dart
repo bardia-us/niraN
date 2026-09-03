@@ -104,7 +104,11 @@ final class WindowsXrayConfigBuilder {
             },
           },
       ],
-      'routing': _routing(settings, iranCidrs),
+      'routing': _routing(
+        settings,
+        iranCidrs,
+        blockQuic: _shouldBlockQuic(settings) && _isTcpBased(server),
+      ),
     };
     if (_bool(settings, 'enableLocalDns', true) &&
         _bool(settings, 'enableFakeDns', false)) {
@@ -249,7 +253,9 @@ final class WindowsXrayConfigBuilder {
     Map<String, Object?> settings,
   ) => {
     'tag': 'proxy',
-    'protocol': server.protocol.toLowerCase(),
+    'protocol': server.protocol.toLowerCase() == 'hysteria2'
+        ? 'hysteria'
+        : server.protocol.toLowerCase(),
     'settings': switch (server.protocol.toLowerCase()) {
       'trojan' => {
         'servers': [
@@ -275,6 +281,36 @@ final class WindowsXrayConfigBuilder {
             ],
           },
         ],
+      },
+      'shadowsocks' => {
+        'servers': [
+          {
+            'address': server.address,
+            'port': server.port,
+            'method': server.parameters['method'],
+            'password': server.credential,
+          },
+        ],
+      },
+      'socks' || 'http' => {
+        'servers': [
+          {
+            'address': server.address,
+            'port': server.port,
+            if ((server.parameters['username'] ?? '').isNotEmpty)
+              'users': [
+                {
+                  'user': server.parameters['username'],
+                  'pass': server.parameters['password'] ?? server.credential,
+                },
+              ],
+          },
+        ],
+      },
+      'hysteria2' => {
+        'version': 2,
+        'address': server.address,
+        'port': server.port,
       },
       _ => {
         'vnext': [
@@ -344,6 +380,8 @@ final class WindowsXrayConfigBuilder {
             'header': {'type': headerType},
           };
         }
+      case 'hysteria':
+        result['hysteriaSettings'] = {'version': 2, 'auth': server.credential};
     }
     switch (server.security.toLowerCase()) {
       case 'tls':
@@ -373,6 +411,20 @@ final class WindowsXrayConfigBuilder {
         throw const FormatException('FinalMask must be a JSON object');
       }
       result['finalmask'] = decoded;
+    } else if (server.protocol.toLowerCase() == 'hysteria2' &&
+        (server.parameters['obfs'] ?? '').toLowerCase() == 'salamander') {
+      result['finalmask'] = {
+        'udp': [
+          {
+            'type': 'salamander',
+            'settings': {
+              'password':
+                  server.parameters['obfs-password'] ??
+                  server.parameters['obfsPassword'],
+            },
+          },
+        ],
+      };
     }
     final sockopt = <String, Object?>{};
     if (_bool(settings, 'enableIpv6', true) &&
@@ -436,8 +488,9 @@ final class WindowsXrayConfigBuilder {
 
   Map<String, Object?> _routing(
     Map<String, Object?> settings,
-    List<String> iranCidrs,
-  ) {
+    List<String> iranCidrs, {
+    bool blockQuic = false,
+  }) {
     final mode = '${settings['routingMode'] ?? 'global'}';
     if (!const {'global', 'bypassIran', 'custom'}.contains(mode)) {
       throw const FormatException('Unsupported routing mode');
@@ -514,6 +567,14 @@ final class WindowsXrayConfigBuilder {
         });
       }
     }
+    if (blockQuic) {
+      rules.insert(0, {
+        'type': 'field',
+        'network': 'udp',
+        'port': '443',
+        'outboundTag': 'blocked',
+      });
+    }
     return {'domainStrategy': domainStrategy, 'rules': rules};
   }
 
@@ -522,6 +583,10 @@ final class WindowsXrayConfigBuilder {
       'vless',
       'vmess',
       'trojan',
+      'shadowsocks',
+      'socks',
+      'http',
+      'hysteria2',
     }.contains(server.protocol.toLowerCase())) {
       throw const FormatException('Unsupported proxy protocol');
     }
@@ -529,8 +594,17 @@ final class WindowsXrayConfigBuilder {
         server.address.length > 253 ||
         server.port < 1 ||
         server.port > 65535 ||
-        server.credential.isEmpty) {
+        (server.credential.isEmpty &&
+            !const {'socks', 'http'}.contains(server.protocol.toLowerCase()))) {
       throw const FormatException('Server endpoint is invalid');
+    }
+    if (server.protocol.toLowerCase() == 'shadowsocks' &&
+        (server.parameters['method'] ?? '').isEmpty) {
+      throw const FormatException('Shadowsocks method is missing');
+    }
+    if (server.protocol.toLowerCase() == 'hysteria2' &&
+        server.parameters['version'] != '2') {
+      throw const FormatException('Hysteria2 version is invalid');
     }
     if (!const {
       '',
@@ -551,6 +625,20 @@ final class WindowsXrayConfigBuilder {
   int _integer(Map<String, Object?> values, String key, int fallback) =>
       values[key] is num ? (values[key]! as num).toInt() : fallback;
   bool _tunEnabled(Map<String, Object?> values) => values['tunEnabled'] == true;
+  bool _shouldBlockQuic(Map<String, Object?> values) =>
+      _bool(values, 'blockQuicForTcpTransports', true);
+  bool _isTcpBased(WindowsServerRecord server) =>
+      const {
+        'tcp',
+        'ws',
+        'grpc',
+        'xhttp',
+        'splithttp',
+      }.contains(server.transport.toLowerCase()) &&
+      !const {
+        'shadowsocks',
+        'hysteria2',
+      }.contains(server.protocol.toLowerCase());
   String _listenAddress(Map<String, Object?> values) {
     if (!_bool(values, 'allowLanConnections', false)) return '127.0.0.1';
     final address = '${values['localListenAddress'] ?? '0.0.0.0'}'.trim();

@@ -22,6 +22,8 @@ class NirangNative {
       _backend.refreshSubscription();
   static Future<List<dynamic>> selectServer(String id) =>
       _backend.selectServer(id);
+  static Future<List<dynamic>> reorderServers(List<String> ids) =>
+      _backend.reorderServers(ids);
   static Future<List<dynamic>> updateServerProfile(
     String id,
     Map<String, String> values,
@@ -49,6 +51,7 @@ class NirangNative {
   static Future<void> openTelegram() => _backend.openTelegram();
   static Future<void> openExternalUrl(String url) =>
       _backend.openExternalUrl(url);
+  static Future<void> exitApplication() => _backend.exitApplication();
   static Future<void> recordTelegramDecision(String decision) =>
       _backend.recordTelegramDecision(decision);
   static Future<void> recordFlutterError(String message) =>

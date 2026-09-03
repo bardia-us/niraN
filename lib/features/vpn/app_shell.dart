@@ -9,6 +9,8 @@ import '../../core/diagnostics.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/update_checker.dart';
+import '../../core/windows_update_manager.dart';
 import '../../core/widgets/glass_dialog.dart';
 import '../logs/logs_screen.dart';
 import '../servers/servers_screen.dart';
@@ -24,9 +26,11 @@ class AppShell extends ConsumerStatefulWidget {
 }
 
 class _AppShellState extends ConsumerState<AppShell> {
+  static Future<ReleaseCheckResult?>? _startupUpdateOperation;
   int _index = 0;
   bool _reminderQueued = false;
   bool _performancePromptQueued = false;
+  bool _startupUpdateQueued = false;
 
   @override
   void initState() {
@@ -97,6 +101,13 @@ class _AppShellState extends ConsumerState<AppShell> {
             ),
           ),
         ),
+      );
+    }
+    if (!_startupUpdateQueued) {
+      _startupUpdateQueued = true;
+      final version = ref.read(appControllerProvider).value?.appVersion ?? '';
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _checkStartupUpdate(version),
       );
     }
 
@@ -303,6 +314,57 @@ class _AppShellState extends ConsumerState<AppShell> {
       'performanceMode': enable,
       'performanceModePrompted': true,
     });
+  }
+
+  Future<void> _checkStartupUpdate(String currentVersion) async {
+    if (!mounted || currentVersion.isEmpty) return;
+    await WindowsUpdateManager.instance.initialize(currentVersion);
+    try {
+      final release = await (_startupUpdateOperation ??=
+          const GitHubUpdateChecker()
+              .check(currentVersion)
+              .then<ReleaseCheckResult?>((value) => value)
+              .catchError((Object _) => null));
+      if (release == null) return;
+      if (!mounted || !release.updateAvailable) return;
+      final action = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => NirangAlertDialog(
+          icon: const Icon(Icons.new_releases_outlined),
+          title: Text(context.s('newVersionAvailable')),
+          content: Text('${release.latestVersion}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'later'),
+              child: Text(context.s('later')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'browser'),
+              child: const Text('Browser'),
+            ),
+            FilledButton(
+              onPressed: release.windowsAsset?.sha256 == null
+                  ? null
+                  : () => Navigator.pop(dialogContext, 'inside'),
+              child: const Text('Download'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (action == 'inside' && release.windowsAsset != null) {
+        await WindowsUpdateManager.instance.start(
+          release.windowsAsset!,
+          release.latestVersion,
+        );
+      } else if (action == 'browser') {
+        await ref
+            .read(appControllerProvider.notifier)
+            .openExternalUrl(release.windowsAsset?.url ?? release.releaseUrl);
+      }
+    } on Object {
+      // Startup must remain usable when GitHub is unavailable.
+    }
   }
 
   Future<void> _showTelegramReminder() async {

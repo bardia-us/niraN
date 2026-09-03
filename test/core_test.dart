@@ -6,8 +6,27 @@ import 'package:niran/core/localization/app_strings.dart';
 import 'package:niran/core/platform/native_models.dart';
 import 'package:niran/core/theme/app_theme.dart';
 import 'package:niran/core/update_checker.dart';
+import 'package:niran/core/windows_update_manager.dart';
 
 void main() {
+  test('Windows updater accepts only versioned x64 release artifacts', () {
+    expect(
+      WindowsUpdateManager.isSupportedWindowsAssetName(
+        'niraN-0.3.2-windows-x64.zip',
+      ),
+      isTrue,
+    );
+    expect(
+      WindowsUpdateManager.isSupportedWindowsAssetName(
+        'niraN-v0.3.2-windows-x64.exe',
+      ),
+      isTrue,
+    );
+    expect(
+      WindowsUpdateManager.isSupportedWindowsAssetName('../niraN.exe'),
+      isFalse,
+    );
+  });
   test('formats persisted byte counters without speed units', () {
     expect(formatBytes(0), '0 B');
     expect(formatBytes(1024), '1.00 KB');

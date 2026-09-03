@@ -32,6 +32,13 @@ final class MethodChannelPlatformBackend implements NiranPlatformBackend {
       const [];
 
   @override
+  Future<List<dynamic>> reorderServers(List<String> ids) async =>
+      (await _methods.invokeMethod<List<dynamic>>('reorderServers', {
+        'ids': ids,
+      })) ??
+      const [];
+
+  @override
   Future<List<dynamic>> updateServerProfile(
     String id,
     Map<String, String> values,
@@ -116,6 +123,9 @@ final class MethodChannelPlatformBackend implements NiranPlatformBackend {
   @override
   Future<void> openExternalUrl(String url) =>
       _methods.invokeMethod('openExternalUrl', {'url': url});
+
+  @override
+  Future<void> exitApplication() => _methods.invokeMethod('exitApplication');
 
   @override
   Future<void> recordTelegramDecision(String decision) =>

@@ -43,11 +43,26 @@ class ReleaseCheckResult {
     required this.latestVersion,
     required this.releaseUrl,
     required this.updateAvailable,
+    this.windowsAsset,
   });
 
   final SemanticVersion latestVersion;
   final Uri releaseUrl;
   final bool updateAvailable;
+  final ReleaseAsset? windowsAsset;
+}
+
+class ReleaseAsset {
+  const ReleaseAsset({
+    required this.name,
+    required this.url,
+    required this.size,
+    this.sha256,
+  });
+  final String name;
+  final Uri url;
+  final int size;
+  final String? sha256;
 }
 
 class GitHubUpdateChecker {
@@ -59,7 +74,7 @@ class GitHubUpdateChecker {
       final request = await client.getUrl(Uri.parse(nirangLatestReleaseApi));
       request.headers
         ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
-        ..set(HttpHeaders.userAgentHeader, 'niraN-update-checker/0.3.1');
+        ..set(HttpHeaders.userAgentHeader, 'niraN-update-checker/0.3.3');
       final response = await request.close().timeout(
         const Duration(seconds: 10),
       );
@@ -83,11 +98,47 @@ class GitHubUpdateChecker {
           !releaseUrl.path.startsWith('/bardia-us/niraN/releases/')) {
         throw const FormatException('Invalid release URL');
       }
+      ReleaseAsset? windowsAsset;
+      final assets = payload['assets'];
+      if (assets is List) {
+        for (final value in assets.whereType<Map>()) {
+          final name = '${value['name'] ?? ''}';
+          final lower = name.toLowerCase();
+          if (!lower.contains('windows') ||
+              !lower.contains('x64') ||
+              !(lower.endsWith('.zip') ||
+                  lower.endsWith('.exe') ||
+                  lower.endsWith('.msix'))) {
+            continue;
+          }
+          final url = Uri.tryParse('${value['browser_download_url'] ?? ''}');
+          if (url == null ||
+              url.scheme != 'https' ||
+              !const {
+                'github.com',
+                'objects.githubusercontent.com',
+              }.contains(url.host)) {
+            continue;
+          }
+          final rawDigest = '${value['digest'] ?? ''}';
+          final digest = RegExp(
+            r'^sha256:([0-9a-fA-F]{64})$',
+          ).firstMatch(rawDigest)?.group(1)?.toLowerCase();
+          windowsAsset = ReleaseAsset(
+            name: name,
+            url: url,
+            size: (value['size'] as num?)?.toInt() ?? 0,
+            sha256: digest,
+          );
+          break;
+        }
+      }
       return ReleaseCheckResult(
         latestVersion: latest,
         releaseUrl: releaseUrl,
         updateAvailable:
             latest.compareTo(SemanticVersion.parse(currentVersion)) > 0,
+        windowsAsset: windowsAsset,
       );
     } finally {
       client.close(force: true);
