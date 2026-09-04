@@ -102,6 +102,21 @@ endif()
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
+# Keep the portable ZIP self-contained on clean Windows 10/11 systems. The
+# runner links against the MSVC runtime, so redistribute the app-local release
+# DLLs instead of requiring users to install the VC++ Redistributable first.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP_WARNINGS TRUE)
+set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+# Flutter uses a generator expression as its in-place install prefix. Prevent
+# the module's default relative `bin` install rule and install the discovered
+# app-local DLLs through Flutter's evaluated bundle destination below.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+include(InstallRequiredSystemLibraries)
+if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+  install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+    DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
+endif()
+
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 

@@ -65,7 +65,7 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
         ..followRedirects = false
         ..headers.contentType = ContentType.json
         ..headers.set(HttpHeaders.acceptHeader, 'application/json, text/plain')
-        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.3');
+        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.2');
       if (token != null) {
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       }
@@ -269,7 +269,7 @@ final class WindowsRemoteAccessService
       'device_name': _clean(info.deviceName, 'Windows PC'),
       'windows_username': _clean(info.windowsUsername, 'Unknown user'),
       'windows_version': _clean(info.windowsVersion, 'Windows'),
-      'app_version': _clean(info.appVersion, '0.3.3'),
+      'app_version': _clean(info.appVersion, '0.3.2'),
       'last_seen': _now(),
     };
     _record = updated;

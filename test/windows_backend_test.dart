@@ -10,10 +10,51 @@ import 'package:niran/platform/windows/windows_server_record.dart';
 import 'package:niran/platform/windows/windows_subscription_parser.dart';
 import 'package:niran/platform/windows/windows_xray_config_builder.dart';
 import 'package:niran/core/registration/device_registration.dart';
+import 'package:niran/platform/windows/windows_auto_start.dart';
 
 void main() {
   const parser = WindowsSubscriptionParser();
   const builder = WindowsXrayConfigBuilder();
+
+  test(
+    'portable auto-start is applied and persisted only when changed',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-autostart-',
+      );
+      final autoStart = _FakeAutoStartController();
+      try {
+        final backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartController: autoStart,
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        await backend.initialize();
+        final enabled = await backend.updateSettings({
+          'startWithWindows': true,
+        });
+        expect(autoStart.values, [true]);
+        expect(enabled['startWithWindows'], isTrue);
+        await backend.updateSettings({'startWithWindows': true});
+        expect(autoStart.values, [true]);
+        final disabled = await backend.updateSettings({
+          'startWithWindows': false,
+        });
+        expect(autoStart.values, [true, false]);
+        expect(disabled['startWithWindows'], isFalse);
+        final persisted =
+            jsonDecode(
+                  await File('${directory.path}\\state.json').readAsString(),
+                )
+                as Map;
+        expect((persisted['settings'] as Map)['startWithWindows'], isFalse);
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 
   test('Windows subscription parser supports VLESS, Trojan, and VMess', () {
     const vless =
@@ -892,4 +933,11 @@ final class _AllowedRemoteAccess implements RemoteAccessController {
     await requireAllowed();
     return const RemoteSubscription([], null);
   }
+}
+
+final class _FakeAutoStartController implements AutoStartController {
+  final List<bool> values = [];
+
+  @override
+  Future<void> setEnabled(bool enabled) async => values.add(enabled);
 }

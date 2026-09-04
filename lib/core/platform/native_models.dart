@@ -218,6 +218,7 @@ class NativeSettings {
     this.performanceMode = false,
     this.performanceModePrompted = false,
     this.showRecentLogsOnHome = true,
+    this.startWithWindows = false,
     this.ipCheckUrl = 'https://api.ip.sb/geoip',
     this.telegramUrlConfigured = true,
     this.telegramContact = '',
@@ -270,6 +271,7 @@ class NativeSettings {
     performanceMode: map['performanceMode'] == true,
     performanceModePrompted: map['performanceModePrompted'] == true,
     showRecentLogsOnHome: map['showRecentLogsOnHome'] != false,
+    startWithWindows: map['startWithWindows'] == true,
     ipCheckUrl: '${map['ipCheckUrl'] ?? 'https://api.ip.sb/geoip'}',
     telegramUrlConfigured: map['telegramUrlConfigured'] != false,
     telegramContact: '${map['telegramContact'] ?? ''}',
@@ -317,6 +319,7 @@ class NativeSettings {
   final bool performanceMode;
   final bool performanceModePrompted;
   final bool showRecentLogsOnHome;
+  final bool startWithWindows;
   final String ipCheckUrl;
   final bool telegramUrlConfigured;
   final String telegramContact;
@@ -389,6 +392,7 @@ class NativeSettings {
         'showRecentLogsOnHome',
         showRecentLogsOnHome,
       ),
+      startWithWindows: boolValue('startWithWindows', startWithWindows),
       ipCheckUrl: stringValue('ipCheckUrl', ipCheckUrl),
       telegramUrlConfigured: telegramUrlConfigured,
       telegramContact: telegramContact,
@@ -441,7 +445,7 @@ class AppSnapshot {
     this.logs = const [],
     this.lastUpdated = 0,
     this.coreVersion = 'Unavailable',
-    this.appVersion = '0.3.3',
+    this.appVersion = '0.3.2',
     this.subscriptionConfigured = false,
     this.telegramEligible = false,
     this.subscriptionError,

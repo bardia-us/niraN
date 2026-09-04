@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/formatters.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/widgets/glass_dialog.dart';
+import '../../core/widgets/operation_error.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/update_checker.dart';
 import '../../core/windows_update_manager.dart';
@@ -19,6 +20,63 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _checkingUpdates = false;
   bool _updateManagerInitialized = false;
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _updateDownloadsKey = GlobalKey();
+  int _handledFocusRequest = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WindowsUpdateManager.instance.addListener(_handleUpdateManagerFocus);
+  }
+
+  @override
+  void dispose() {
+    WindowsUpdateManager.instance.removeListener(_handleUpdateManagerFocus);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleUpdateManagerFocus() {
+    final request = WindowsUpdateManager.instance.focusRequest;
+    if (request == _handledFocusRequest) return;
+    _handledFocusRequest = request;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _revealDownloads());
+  }
+
+  Future<void> _revealDownloads() async {
+    if (!mounted) return;
+    if (!_scrollController.hasClients) {
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!mounted || !_scrollController.hasClients) return;
+
+    // ListView builds children lazily, so the download tile may not have a
+    // BuildContext yet. Walk the viewport towards it, then use its real anchor
+    // for the final smooth positioning.
+    _scrollController.jumpTo(_scrollController.position.minScrollExtent);
+    for (var attempt = 0; attempt < 20 && mounted; attempt++) {
+      await WidgetsBinding.instance.endOfFrame;
+      final target = _updateDownloadsKey.currentContext;
+      if (target != null && target.mounted) {
+        await Scrollable.ensureVisible(
+          target,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+          alignment: .45,
+        );
+        return;
+      }
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      final next = (position.pixels + position.viewportDimension * .8).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      if ((next - position.pixels).abs() < 1) return;
+      _scrollController.jumpTo(next);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,7 +89,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.3',
+          appVersion: app?.appVersion ?? '0.3.2',
         );
       }),
     );
@@ -50,6 +108,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       WindowsUpdateManager.instance.initialize(app.appVersion);
     }
     return ListView(
+      controller: _scrollController,
       padding: const EdgeInsets.only(bottom: 24),
       children: [
         _Header(context.s('tunSettings')),
@@ -520,6 +579,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             () => controller.updateSettings({'showRecentLogsOnHome': value}),
           ),
         ),
+        SwitchListTile(
+          secondary: const Icon(Icons.login_rounded),
+          title: Text(context.s('startWithWindows')),
+          subtitle: Text(context.s('startWithWindowsSummary')),
+          value: settings.startWithWindows,
+          onChanged: (value) => _perform(
+            context,
+            () => controller.updateSettings({'startWithWindows': value}),
+          ),
+        ),
         const Divider(indent: 56),
         _Header(context.s('updates')),
         ListTile(
@@ -536,7 +605,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ? null
               : () => _checkForUpdates(context, controller, app.appVersion),
         ),
-        _UpdateDownloadTile(controller: controller),
+        KeyedSubtree(
+          key: _updateDownloadsKey,
+          child: _UpdateDownloadTile(controller: controller),
+        ),
         const Divider(indent: 56),
         _Header(context.s('settings')),
         ListTile(
@@ -647,6 +719,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           release.windowsAsset!,
           release.latestVersion,
         );
+        WindowsUpdateManager.instance.requestManagerFocus();
       } else if (action == 'browser' && context.mounted) {
         await _perform(
           context,
@@ -1186,16 +1259,32 @@ class _UpdateDownloadTile extends StatelessWidget {
       final total = value.total > 0 ? formatBytes(value.total) : 'Unknown';
       return ListTile(
         leading: Icon(switch (value.status) {
-          UpdateDownloadStatus.ready => Icons.download_done_rounded,
-          UpdateDownloadStatus.failed => Icons.error_outline_rounded,
+          UpdateDownloadStatus.readyToUpdate ||
+          UpdateDownloadStatus.updateCompleted => Icons.download_done_rounded,
+          UpdateDownloadStatus.failed ||
+          UpdateDownloadStatus.updateFailed => Icons.error_outline_rounded,
+          UpdateDownloadStatus.paused => Icons.pause_circle_outline_rounded,
+          UpdateDownloadStatus.cancelled => Icons.cancel_outlined,
+          UpdateDownloadStatus.downloaded ||
+          UpdateDownloadStatus.verifying => Icons.verified_outlined,
+          UpdateDownloadStatus.closingApp ||
+          UpdateDownloadStatus.extracting ||
+          UpdateDownloadStatus.replacingFiles ||
+          UpdateDownloadStatus.renamingFolder ||
+          UpdateDownloadStatus.restarting => Icons.system_update_alt_rounded,
           _ => Icons.downloading_rounded,
         }),
-        title: Text('Update download · ${value.version}'),
+        title: Text('${context.s('updateDownload')} · ${value.version}'),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(value.error ?? '$received / $total'),
-            if (value.status == UpdateDownloadStatus.downloading)
+            Text(
+              value.error ??
+                  '${_downloadStatusLabel(context, value.status)} · $received / $total',
+            ),
+            if (value.status == UpdateDownloadStatus.downloading ||
+                value.status == UpdateDownloadStatus.downloaded ||
+                value.status == UpdateDownloadStatus.verifying)
               LinearProgressIndicator(value: value.progress),
           ],
         ),
@@ -1206,35 +1295,74 @@ class _UpdateDownloadTile extends StatelessWidget {
               IconButton(
                 tooltip: 'Pause',
                 onPressed: manager.pause,
-                icon: const Icon(Icons.pause_rounded),
+                icon: const Icon(Icons.pause_circle_outline_rounded),
+              ),
+            if (value.status == UpdateDownloadStatus.downloading)
+              IconButton(
+                tooltip: context.s('cancelDownload'),
+                onPressed: manager.cancel,
+                icon: const Icon(Icons.cancel_outlined),
               ),
             if (value.status == UpdateDownloadStatus.paused ||
+                value.status == UpdateDownloadStatus.cancelled ||
                 value.status == UpdateDownloadStatus.failed)
               IconButton(
-                tooltip: 'Resume',
+                tooltip: context.s('resumeDownload'),
                 onPressed: manager.resume,
                 icon: const Icon(Icons.play_arrow_rounded),
               ),
-            if (value.status == UpdateDownloadStatus.ready)
+            if (value.status == UpdateDownloadStatus.readyToUpdate ||
+                value.status == UpdateDownloadStatus.updateFailed)
               IconButton(
-                tooltip: 'Open update',
+                tooltip: context.s('installUpdate'),
                 onPressed: () => _perform(context, () async {
                   final mustExit = await manager.launch();
                   if (mustExit) await controller.exitApplication();
                 }),
                 icon: const Icon(Icons.install_desktop_rounded),
               ),
-            IconButton(
-              tooltip: 'Delete',
-              onPressed: manager.delete,
-              icon: const Icon(Icons.delete_outline_rounded),
-            ),
+            if (value.status != UpdateDownloadStatus.downloading &&
+                value.status != UpdateDownloadStatus.downloaded &&
+                value.status != UpdateDownloadStatus.verifying &&
+                !manager.isInstalling) ...[
+              IconButton(
+                tooltip: context.s('openDownloadFolder'),
+                onPressed: () => _perform(context, manager.openFolder),
+                icon: const Icon(Icons.folder_open_rounded),
+              ),
+              IconButton(
+                tooltip: context.s('delete'),
+                onPressed: manager.delete,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
           ],
         ),
       );
     },
   );
 }
+
+String _downloadStatusLabel(
+  BuildContext context,
+  UpdateDownloadStatus status,
+) => switch (status) {
+  UpdateDownloadStatus.downloading => context.s('downloading'),
+  UpdateDownloadStatus.paused => context.s('paused'),
+  UpdateDownloadStatus.cancelled => context.s('cancelled'),
+  UpdateDownloadStatus.downloaded => context.s('downloaded'),
+  UpdateDownloadStatus.verifying => context.s('verifying'),
+  UpdateDownloadStatus.readyToUpdate => context.s('readyToUpdate'),
+  UpdateDownloadStatus.closingApp => context.s('closingApp'),
+  UpdateDownloadStatus.extracting => context.s('extracting'),
+  UpdateDownloadStatus.replacingFiles => context.s('replacingFiles'),
+  UpdateDownloadStatus.renamingFolder => context.s('renamingFolder'),
+  UpdateDownloadStatus.restarting => context.s('restartingApp'),
+  UpdateDownloadStatus.updateCompleted => context.s('completed'),
+  UpdateDownloadStatus.updateFailed => context.s('updateFailed'),
+  UpdateDownloadStatus.failed => context.s('failed'),
+  UpdateDownloadStatus.idle => '',
+};
 
 final _hostnameRule = RegExp(
   r'^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$',
@@ -1349,10 +1477,6 @@ Future<void> _perform(
   try {
     await operation();
   } catch (error) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.s('operationFailed')}: $error')),
-      );
-    }
+    if (context.mounted) await showOperationError(context, error);
   }
 }

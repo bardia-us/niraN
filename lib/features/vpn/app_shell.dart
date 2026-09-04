@@ -12,6 +12,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/update_checker.dart';
 import '../../core/windows_update_manager.dart';
 import '../../core/widgets/glass_dialog.dart';
+import '../../core/widgets/operation_error.dart';
 import '../logs/logs_screen.dart';
 import '../servers/servers_screen.dart';
 import '../settings/settings_screen.dart';
@@ -31,11 +32,77 @@ class _AppShellState extends ConsumerState<AppShell> {
   bool _reminderQueued = false;
   bool _performancePromptQueued = false;
   bool _startupUpdateQueued = false;
+  late UpdateDownloadStatus _lastUpdateStatus;
+  bool _installPromptQueued = false;
 
   @override
   void initState() {
     super.initState();
     NirangDiagnostics.currentFeature = 'home';
+    _lastUpdateStatus = WindowsUpdateManager.instance.snapshot.status;
+    WindowsUpdateManager.instance.addListener(_handleUpdateDownload);
+  }
+
+  @override
+  void dispose() {
+    WindowsUpdateManager.instance.removeListener(_handleUpdateDownload);
+    super.dispose();
+  }
+
+  void _handleUpdateDownload() {
+    final status = WindowsUpdateManager.instance.snapshot.status;
+    final justCompleted =
+        status == UpdateDownloadStatus.readyToUpdate &&
+        (_lastUpdateStatus == UpdateDownloadStatus.downloading ||
+            _lastUpdateStatus == UpdateDownloadStatus.downloaded ||
+            _lastUpdateStatus == UpdateDownloadStatus.verifying);
+    _lastUpdateStatus = status;
+    if (!justCompleted || _installPromptQueued) return;
+    _installPromptQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await _showDownloadedUpdatePrompt();
+      } finally {
+        _installPromptQueued = false;
+      }
+    });
+  }
+
+  Future<void> _showDownloadedUpdatePrompt() async {
+    if (!mounted ||
+        WindowsUpdateManager.instance.snapshot.status !=
+            UpdateDownloadStatus.readyToUpdate) {
+      return;
+    }
+    final version = WindowsUpdateManager.instance.snapshot.version;
+    final install = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => NirangAlertDialog(
+        icon: const Icon(Icons.download_done_rounded),
+        title: Text(context.s('readyToUpdate')),
+        content: Text(version),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(context.s('later')),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.install_desktop_rounded),
+            label: Text(context.s('installUpdate')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || install != true) return;
+    try {
+      final mustExit = await WindowsUpdateManager.instance.launch();
+      if (mustExit) {
+        await ref.read(appControllerProvider.notifier).exitApplication();
+      }
+    } on Object catch (error) {
+      if (mounted) await showOperationError(context, error);
+    }
   }
 
   @override
@@ -327,36 +394,57 @@ class _AppShellState extends ConsumerState<AppShell> {
               .catchError((Object _) => null));
       if (release == null) return;
       if (!mounted || !release.updateAvailable) return;
+      final updateManager = WindowsUpdateManager.instance;
+      final downloaded =
+          release.windowsAsset != null &&
+          await updateManager.hasVerifiedDownload(
+            release.windowsAsset!,
+            release.latestVersion,
+          );
+      if (!mounted) return;
       final action = await showDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           icon: const Icon(Icons.new_releases_outlined),
           title: Text(context.s('newVersionAvailable')),
-          content: Text('${release.latestVersion}'),
+          content: Text(
+            downloaded
+                ? '${release.latestVersion}\n${context.s('readyToUpdate')}'
+                : '${release.latestVersion}',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, 'later'),
               child: Text(context.s('later')),
             ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, 'browser'),
-              child: const Text('Browser'),
-            ),
+            if (!downloaded)
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, 'browser'),
+                child: const Text('Browser'),
+              ),
             FilledButton(
-              onPressed: release.windowsAsset?.sha256 == null
+              onPressed: downloaded
+                  ? () => Navigator.pop(dialogContext, 'install')
+                  : release.windowsAsset?.sha256 == null
                   ? null
                   : () => Navigator.pop(dialogContext, 'inside'),
-              child: const Text('Download'),
+              child: Text(downloaded ? context.s('installUpdate') : 'Download'),
             ),
           ],
         ),
       );
       if (!mounted) return;
       if (action == 'inside' && release.windowsAsset != null) {
-        await WindowsUpdateManager.instance.start(
-          release.windowsAsset!,
-          release.latestVersion,
-        );
+        await updateManager.start(release.windowsAsset!, release.latestVersion);
+        if (!mounted) return;
+        NirangDiagnostics.currentFeature = 'settings';
+        setState(() => _index = 2);
+        updateManager.requestManagerFocus();
+      } else if (action == 'install') {
+        final mustExit = await updateManager.launch();
+        if (mustExit) {
+          await ref.read(appControllerProvider.notifier).exitApplication();
+        }
       } else if (action == 'browser') {
         await ref
             .read(appControllerProvider.notifier)

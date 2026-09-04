@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../core/platform/platform_backend.dart';
 import '../../core/registration/device_registration.dart';
 import 'windows_native_host.dart';
+import 'windows_auto_start.dart';
 import 'windows_real_delay.dart';
 import 'windows_remote_access.dart';
 import 'windows_server_record.dart';
@@ -22,12 +23,15 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     Future<void> Function(int port)? proxyReadinessProbe,
     Future<void> Function(List<int> ports)? localPortPreflight,
     RemoteAccessController? remoteAccess,
+    AutoStartController? autoStartController,
     bool autoStartCore = true,
   }) : _host = host ?? MethodChannelWindowsNativeHost(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _proxyReadinessProbe = proxyReadinessProbe,
        _localPortPreflight = localPortPreflight,
        _remoteAccess = remoteAccess ?? windowsRemoteAccess,
+       _autoStartController =
+           autoStartController ?? WindowsAutoStartController(),
        _autoStartCore = autoStartCore {
     final nativeHost = _host;
     if (nativeHost is MethodChannelWindowsNativeHost) {
@@ -35,7 +39,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.3';
+  static const _appVersionFallback = '0.3.2';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -45,6 +49,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final Future<void> Function(int port)? _proxyReadinessProbe;
   final Future<void> Function(List<int> ports)? _localPortPreflight;
   final RemoteAccessController _remoteAccess;
+  final AutoStartController _autoStartController;
   final bool _autoStartCore;
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
@@ -742,6 +747,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'enableUdp',
       'allowLanConnections',
       'fragmentEnabled',
+      'startWithWindows',
     };
     for (final entry in values.entries) {
       if (stringKeys.contains(entry.key)) {
@@ -881,6 +887,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       // Fail before stopping a healthy Core. This only validates privileges
       // and bundled files; native code never requests elevation itself.
       await _host.validateTunPrerequisites();
+    }
+    if (values.containsKey('startWithWindows') &&
+        previous['startWithWindows'] != updated['startWithWindows']) {
+      await _autoStartController.setEnabled(
+        updated['startWithWindows'] == true,
+      );
     }
     _settings = updated;
     await _persistState();
@@ -1592,6 +1604,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'performanceMode': false,
     'performanceModePrompted': false,
     'showRecentLogsOnHome': true,
+    'startWithWindows': false,
     'ipCheckUrl': 'https://api.ip.sb/geoip',
     'telegramUrlConfigured': false,
     'telegramContact': '',

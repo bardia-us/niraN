@@ -10,6 +10,7 @@ import '../../core/widgets/glass_surface.dart';
 import '../../core/widgets/glass_dialog.dart';
 import '../../core/widgets/country_flag_badge.dart';
 import '../../core/widgets/interactive_depth.dart';
+import '../../core/widgets/operation_error.dart';
 import 'app_controller.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -409,9 +410,7 @@ class _ConnectionAction extends StatelessWidget {
   }
 
   void _showOperationError(BuildContext context, Object error) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${context.s('operationFailed')}: $error')),
-    );
+    showOperationError(context, error);
   }
 }
 
@@ -932,11 +931,7 @@ Future<void> _runProxyAction(
       ).showSnackBar(SnackBar(content: Text(successMessage)));
     }
   } catch (error) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.s('operationFailed')}: $error')),
-      );
-    }
+    if (context.mounted) await showOperationError(context, error);
   }
 }
 
@@ -947,10 +942,6 @@ Future<void> _perform(
   try {
     await operation();
   } catch (error) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.s('operationFailed')}: $error')),
-      );
-    }
+    if (context.mounted) await showOperationError(context, error);
   }
 }

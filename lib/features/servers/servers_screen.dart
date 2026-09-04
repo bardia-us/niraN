@@ -11,6 +11,7 @@ import '../../core/widgets/glass_dialog.dart';
 import '../../core/widgets/country_flag_badge.dart';
 import '../../core/widgets/glass_menu.dart';
 import '../../core/widgets/interactive_depth.dart';
+import '../../core/widgets/operation_error.dart';
 import '../vpn/app_controller.dart';
 import 'server_information_screen.dart';
 import 'server_profile_settings_screen.dart';
@@ -678,10 +679,6 @@ Future<void> _perform(
   try {
     await operation();
   } catch (error) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.s('operationFailed')}: $error')),
-      );
-    }
+    if (context.mounted) await showOperationError(context, error);
   }
 }

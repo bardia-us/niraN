@@ -1,14 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:niran/core/formatters.dart';
 import 'package:niran/core/localization/app_strings.dart';
 import 'package:niran/core/platform/native_models.dart';
 import 'package:niran/core/theme/app_theme.dart';
 import 'package:niran/core/update_checker.dart';
 import 'package:niran/core/windows_update_manager.dart';
+import 'package:niran/core/widgets/operation_error.dart';
 
 void main() {
+  test('TUN privilege failures are recognized for friendly UI', () {
+    expect(
+      isTunPrivilegeError(
+        PlatformException(
+          code: 'tun_privilege',
+          message: 'TUN mode requires administrator privileges.',
+        ),
+      ),
+      isTrue,
+    );
+    expect(isTunPrivilegeError(StateError('unrelated')), isFalse);
+  });
+
   test('Windows updater accepts only versioned x64 release artifacts', () {
     expect(
       WindowsUpdateManager.isSupportedWindowsAssetName(
