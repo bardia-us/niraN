@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/platform/native_models.dart';
@@ -21,6 +22,7 @@ final performanceModeProvider = Provider<bool>(
 class AppController extends AsyncNotifier<AppSnapshot> {
   StreamSubscription<Map<dynamic, dynamic>>? _events;
   Future<void>? _logsRefresh;
+  Future<void>? _subscriptionRefresh;
   int _settingsRevision = 0;
 
   @override
@@ -43,6 +45,17 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   }
 
   Future<void> refreshSubscription() async {
+    final active = _subscriptionRefresh;
+    if (active != null) return active;
+    late final Future<void> request;
+    request = _refreshSubscriptionOnce().whenComplete(() {
+      if (identical(_subscriptionRefresh, request)) _subscriptionRefresh = null;
+    });
+    _subscriptionRefresh = request;
+    return request;
+  }
+
+  Future<void> _refreshSubscriptionOnce() async {
     _set(
       (value) =>
           value.copyWith(isRefreshing: true, clearSubscriptionError: true),
@@ -59,7 +72,11 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       );
     } catch (error) {
       _set((value) => value.copyWith(subscriptionError: _errorText(error)));
-      rethrow;
+      throw PlatformException(
+        code: 'subscription_refresh',
+        message:
+            'Subscription update failed. Check your connection and try again.',
+      );
     } finally {
       _set((value) => value.copyWith(isRefreshing: false));
     }
@@ -187,6 +204,62 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       rethrow;
     }
   }
+
+  Future<void> resetSettings() => updateSettings(const {
+    'systemProxyEnabled': true,
+    'tunEnabled': false,
+    'routingMode': 'bypassIran',
+    'customDomains': '',
+    'customIps': '',
+    'enableLocalDns': true,
+    'enableFakeDns': false,
+    'remoteDns': 'https://dns.google/dns-query',
+    'directDnsEnabled': false,
+    'directDnsAddress': '178.22.122.100',
+    'vpnDns': '1.1.1.1',
+    'vpnInterfaceAddress': '10.10.14.1/30',
+    'vpnInterfaceIpv6Address': 'fdfe:dcba:9876::1/126',
+    'localSocksPort': 10808,
+    'localHttpPort': 10809,
+    'enableUdp': true,
+    'allowLanConnections': false,
+    'localListenAddress': '0.0.0.0',
+    'realPingConcurrency': 16,
+    'realDelayUrl': 'https://www.gstatic.com/generate_204',
+    'realDelayTimeoutSeconds': 8,
+    'domainStrategy': 'AsIs',
+    'sniffingEnabled': true,
+    'sniffingType': 'http,tls,quic',
+    'routeOnly': false,
+    'xrayLogLevel': 'warning',
+    'fragmentEnabled': false,
+    'fragmentPackets': 'tlshello',
+    'fragmentLength': '100-200',
+    'fragmentInterval': '10-20',
+    'fragmentMaxSplit': '0',
+    'domesticDns': '223.5.5.5',
+    'dnsQueryStrategy': 'Auto',
+    'dnsParallelQuery': false,
+    'dnsServeStale': false,
+    'directTargetStrategy': 'AsIs',
+    'proxyTargetStrategy': 'AsIs',
+    'proxyDialStrategy': 'Auto',
+    'happyEyeballs': false,
+    'defaultFingerprint': 'chrome',
+    'defaultUserAgent': '',
+    'enableIpv6': true,
+    'preferIpv6': false,
+    'vpnMtu': 1500,
+    'autoUpdate': true,
+    'updateIntervalHours': 12,
+    'themeMode': 'system',
+    'language': 'en',
+    'performanceMode': false,
+    'performanceModePrompted': false,
+    'showRecentLogsOnHome': true,
+    'startWithWindows': false,
+    'ipCheckUrl': 'https://api.ip.sb/geoip',
+  });
 
   Future<void> refreshLogs() {
     final running = _logsRefresh;

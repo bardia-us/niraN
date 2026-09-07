@@ -29,9 +29,14 @@ final class WindowsServerOrderPolicy {
         unused.remove(matches.single);
       }
     }
-    // New subscription entries retain their source order and are never
-    // allowed to shuffle already matched entries.
-    result.addAll(unused);
+    // Insert genuinely new entries next to their nearest refreshed neighbour.
+    // This keeps the manual order of matched entries, while avoiding the old
+    // behaviour where every new (including informational) entry was pushed to
+    // the bottom of the list.
+    for (final item in List<WindowsServerRecord>.of(unused)) {
+      final sourceIndex = refreshed.indexOf(item).clamp(0, result.length);
+      result.insert(sourceIndex, item);
+    }
     return result;
   }
 

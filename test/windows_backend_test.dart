@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -210,6 +211,49 @@ void main() {
     );
   });
 
+  test('Fragment maxSplit is emitted on the Freedom runtime outbound', () {
+    final server = WindowsServerRecord(
+      id: 'fragment',
+      name: 'Fragment',
+      country: 'DE',
+      protocol: 'vless',
+      address: 'example.com',
+      port: 443,
+      credential: '00000000-0000-4000-8000-000000000001',
+      transport: 'ws',
+      security: 'tls',
+      parameters: const {'host': 'example.com'},
+    );
+    final json =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'fragmentEnabled': true,
+                  'fragmentPackets': 'tlshello',
+                  'fragmentLength': '10-20',
+                  'fragmentInterval': '0-5',
+                  'fragmentMaxSplit': '2-4',
+                },
+              ),
+            )
+            as Map;
+    final outbounds = (json['outbounds'] as List).cast<Map>();
+    final proxy = outbounds.firstWhere((item) => item['tag'] == 'proxy');
+    final fragment = outbounds.firstWhere((item) => item['tag'] == 'fragment');
+    expect(
+      (proxy['streamSettings'] as Map)['sockopt']['dialerProxy'],
+      'fragment',
+    );
+    expect((fragment['settings'] as Map)['fragment'], {
+      'packets': 'tlshello',
+      'length': '10-20',
+      'interval': '0-5',
+      'maxSplit': '2-4',
+    });
+  });
+
   test('Windows Xray config is proxy-only and keeps required local ports', () {
     final server = WindowsServerRecord(
       id: 'server',
@@ -275,6 +319,133 @@ void main() {
     );
   });
 
+  test('TUN routing modes reach the generated Xray rules', () {
+    final server = WindowsServerRecord(
+      id: 'server',
+      name: 'Server',
+      country: 'DE',
+      protocol: 'vless',
+      address: 'example.com',
+      port: 443,
+      credential: '00000000-0000-4000-8000-000000000001',
+      transport: 'tcp',
+      security: 'tls',
+      parameters: const {'sni': 'example.com'},
+    );
+    Map build(String mode) =>
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': mode,
+                },
+                iranCidrs: const ['2.144.0.0/14'],
+              ),
+            )
+            as Map;
+
+    final global = build('global');
+    final globalRules = (global['routing']['rules'] as List).whereType<Map>();
+    expect(
+      globalRules.any(
+        (rule) => (rule['domain'] as List? ?? const []).contains('domain:ir'),
+      ),
+      isFalse,
+    );
+    expect((global['outbounds'] as List).first['tag'], 'proxy');
+
+    final bypass = build('bypassIran');
+    final bypassRules = (bypass['routing']['rules'] as List).whereType<Map>();
+    expect(
+      bypassRules.any(
+        (rule) =>
+            rule['outboundTag'] == 'direct' &&
+            (rule['domain'] as List? ?? const []).contains('domain:ir'),
+      ),
+      isTrue,
+    );
+    expect(
+      bypassRules.any(
+        (rule) =>
+            rule['outboundTag'] == 'direct' &&
+            (rule['ip'] as List? ?? const []).contains('2.144.0.0/14'),
+      ),
+      isTrue,
+    );
+
+    final custom =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': 'custom',
+                  'customDomains': 'domain:example.org',
+                  'customIps': '203.0.113.0/24',
+                },
+              ),
+            )
+            as Map;
+    final customRules = (custom['routing']['rules'] as List)
+        .whereType<Map>()
+        .where((rule) => rule['outboundTag'] == 'direct')
+        .toList();
+    expect(
+      customRules.any(
+        (rule) =>
+            rule.containsKey('domain') &&
+            !rule.containsKey('ip') &&
+            (rule['domain'] as List).contains('domain:example.org'),
+      ),
+      isTrue,
+    );
+    expect(
+      customRules.any(
+        (rule) =>
+            rule.containsKey('ip') &&
+            !rule.containsKey('domain') &&
+            (rule['ip'] as List).contains('203.0.113.0/24'),
+      ),
+      isTrue,
+    );
+  });
+
+  test('disabling local SOCKS UDP does not disable Windows TUN UDP', () {
+    final server = WindowsServerRecord(
+      id: 'server',
+      name: 'Server',
+      country: 'DE',
+      protocol: 'vless',
+      address: 'example.com',
+      port: 443,
+      credential: '00000000-0000-4000-8000-000000000001',
+      transport: 'tcp',
+      security: 'tls',
+      parameters: const {'sni': 'example.com'},
+    );
+    final config =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'enableUdp': false,
+                },
+              ),
+            )
+            as Map<String, dynamic>;
+    final inbounds = config['inbounds'] as List<dynamic>;
+    final socks = inbounds.singleWhere((item) => item['protocol'] == 'socks');
+    final tun = inbounds.singleWhere((item) => item['protocol'] == 'tun');
+    expect(socks['settings']['udp'], isFalse);
+    expect(tun['settings']['autoSystemRoutingTable'], contains('0.0.0.0/0'));
+    expect((tun['sniffing']['destOverride'] as List), contains('quic'));
+  });
+
   test(
     'Real Delay config isolates every server behind its own local proxy',
     () {
@@ -337,38 +508,38 @@ void main() {
     },
   );
 
-  test('Real Delay records the faster of two SOCKS transfers', () async {
-    late List<String> capturedArguments;
-    final delay = await measureWindowsRealDelay(
-      target: Uri.parse('https://real-delay.test/generate_204'),
-      socksPort: 21080,
-      timeout: const Duration(seconds: 9),
-      commandRunner: (arguments, timeout) async {
-        capturedArguments = arguments;
-        return (exitCode: 0, stdout: '0.180000\n0.025400\n');
-      },
-    );
+  test(
+    'Real Delay records stable latency through the Xray HTTP proxy',
+    () async {
+      Uri? capturedTarget;
+      int? capturedPort;
+      Duration? capturedTimeout;
+      final delay = await measureWindowsRealDelay(
+        target: Uri.parse('https://real-delay.test/generate_204'),
+        proxyPort: 22080,
+        timeout: const Duration(seconds: 9),
+        probe: (target, proxyPort, timeout) async {
+          capturedTarget = target;
+          capturedPort = proxyPort;
+          capturedTimeout = timeout;
+          return 180;
+        },
+      );
 
-    expect(delay, 25);
-    expect(
-      capturedArguments,
-      containsAllInOrder(['--socks5-hostname', '127.0.0.1:21080']),
-    );
-    expect(
-      capturedArguments.where(
-        (value) => value == 'https://real-delay.test/generate_204',
-      ),
-      hasLength(2),
-    );
-  });
+      expect(delay, 180);
+      expect(capturedTarget, Uri.parse('https://real-delay.test/generate_204'));
+      expect(capturedPort, 22080);
+      expect(capturedTimeout, const Duration(seconds: 9));
+    },
+  );
 
   test('Real Delay returns -1 for a failed proxied request', () async {
     expect(
       await measureWindowsRealDelay(
         target: Uri.parse('https://real-delay.test/generate_204'),
-        socksPort: 21080,
+        proxyPort: 22080,
         timeout: const Duration(seconds: 2),
-        commandRunner: (_, _) async => (exitCode: 28, stdout: ''),
+        probe: (_, _, _) async => -1,
       ),
       -1,
     );
@@ -392,10 +563,22 @@ void main() {
           proxyReadinessProbe: (port) async => host.calls.add('ready:$port'),
         );
 
-        final bootstrap = await backend.initialize();
-
+        final connected = Completer<void>();
+        final subscription = backend.events.listen((event) {
+          if (event['type'] == 'connectionState' &&
+              (event['data'] as Map?)?['state'] == 'connected' &&
+              !connected.isCompleted) {
+            connected.complete();
+          }
+        });
+        await backend.initialize();
+        await connected.future.timeout(const Duration(seconds: 1));
         expect(host.calls, ['start', 'ready:10809', 'enable:10809']);
-        expect(bootstrap['connection'], containsPair('state', 'connected'));
+        expect(
+          (await backend.initialize())['connection'],
+          containsPair('state', 'connected'),
+        );
+        await subscription.cancel();
       } finally {
         await backend.disconnect();
         await directory.delete(recursive: true);
@@ -415,16 +598,199 @@ void main() {
         host: _FakeWindowsHost(),
         dataDirectory: directory,
       );
+      final coreVersion = Completer<String>();
+      final subscription = backend.events.listen((event) {
+        if (event['type'] == 'coreVersion' && !coreVersion.isCompleted) {
+          coreVersion.complete('${event['data']}');
+        }
+      });
       final bootstrap = await backend.initialize();
 
       expect(bootstrap['appVersion'], '0.1.0');
-      expect(bootstrap['coreVersion'], 'v26.7.28');
+      expect(bootstrap['coreVersion'], 'Unavailable');
+      expect(
+        await coreVersion.future.timeout(const Duration(seconds: 1)),
+        'v26.7.28',
+      );
       expect(bootstrap['subscriptionConfigured'], isTrue);
       expect((bootstrap['settings'] as Map)['connectionMode'], 'proxy');
+      await subscription.cancel();
     } finally {
       await directory.delete(recursive: true);
     }
   });
+
+  test(
+    'connection is blocked when the runtime Core version mismatches',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-core-version-mismatch-',
+      );
+      final host = _FakeWindowsHost()..coreVersion = 'v26.3.27';
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+        );
+        await backend.initialize();
+
+        await expectLater(backend.connect('server'), throwsA(isA<Object>()));
+        expect(host.calls, isNot(contains('start')));
+        final logs = await backend.getLogs();
+        expect(
+          logs.any(
+            (entry) => '${(entry as Map)['message']}'.contains(
+              'does not match expected v26.7.28',
+            ),
+          ),
+          isTrue,
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'Windows bootstrap is not blocked by the remote access request',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-nonblocking-startup-',
+      );
+      final access = _DelayedRemoteAccess();
+      try {
+        final backend = WindowsPlatformBackend(
+          remoteAccess: access,
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        final bootstrap = await backend.initialize().timeout(
+          const Duration(seconds: 1),
+        );
+        expect(bootstrap['connection'], containsPair('state', 'disconnected'));
+        expect(access.started, isTrue);
+      } finally {
+        access.complete();
+        await Future<void>.delayed(Duration.zero);
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'Direct DNS migration adds defaults without overwriting user values',
+    () async {
+      Future<Map> loadWith(Map<String, Object?> settings) async {
+        final directory = await Directory.systemTemp.createTemp(
+          'niraN-dns-migration-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        await File(
+          '${directory.path}\\state.json',
+        ).writeAsString(jsonEncode({'settings': settings}));
+        final backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        return (await backend.initialize())['settings'] as Map;
+      }
+
+      final migrated = await loadWith({'routingMode': 'global'});
+      expect(migrated['directDnsEnabled'], isFalse);
+      expect(migrated['directDnsAddress'], '178.22.122.100');
+      expect(migrated['dnsQueryStrategy'], 'Auto');
+      expect(migrated['dnsParallelQuery'], isFalse);
+      expect(migrated['dnsServeStale'], isFalse);
+      expect(migrated['proxyDialStrategy'], 'Auto');
+      expect(migrated['happyEyeballs'], isFalse);
+      expect(migrated['vpnInterfaceIpv6Address'], 'fdfe:dcba:9876::1/126');
+
+      final preserved = await loadWith({
+        'routingMode': 'global',
+        'directDnsEnabled': true,
+        'directDnsAddress': '9.9.9.9',
+        'dnsParallelQuery': true,
+        'proxyDialStrategy': 'UseIPv4',
+      });
+      expect(preserved['directDnsEnabled'], isTrue);
+      expect(preserved['directDnsAddress'], '9.9.9.9');
+      expect(preserved['dnsParallelQuery'], isTrue);
+      expect(preserved['proxyDialStrategy'], 'UseIPv4');
+    },
+  );
+
+  test(
+    'manual reorder of several servers persists across backend restart',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('niraN-order-');
+      try {
+        final records = [
+          for (final entry in const [
+            ('a', 'one.example'),
+            ('b', 'two.example'),
+            ('c', 'three.example'),
+          ])
+            WindowsServerRecord(
+              id: entry.$1,
+              name: entry.$1.toUpperCase(),
+              country: 'DE',
+              protocol: 'vless',
+              address: entry.$2,
+              port: 443,
+              credential: '00000000-0000-4000-8000-00000000000${entry.$1}',
+              transport: 'tcp',
+              security: 'tls',
+              parameters: {'sni': entry.$2},
+            ),
+        ];
+        await File('${directory.path}\\subscription-cache.json').writeAsString(
+          jsonEncode({
+            'servers': records.map((item) => item.toPrivateJson()).toList(),
+            'usage': <String, Object?>{},
+            'lastUpdated': 1,
+          }),
+        );
+        await File('${directory.path}\\state.json').writeAsString(
+          jsonEncode({
+            'selectedId': 'a',
+            'settings': {'routingMode': 'global', 'ipCheckUrl': ''},
+          }),
+        );
+        final first = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        await first.initialize();
+        await first.reorderServers(const ['c', 'a', 'b']);
+        await first.reorderServers(const ['c', 'b', 'a']);
+
+        final reopened = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        final bootstrap = await reopened.initialize();
+        expect(
+          (bootstrap['servers'] as List).whereType<Map>().map(
+            (item) => item['id'],
+          ),
+          ['c', 'b', 'a'],
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 
   test('Windows connection owns System Proxy in a safe order', () async {
     final directory = await Directory.systemTemp.createTemp(
@@ -455,6 +821,7 @@ void main() {
         'enable:10809',
         'disable',
         'stop',
+        'stopSpeedtest',
       ]);
       expect(
         (await backend.initialize())['connection'],
@@ -465,37 +832,102 @@ void main() {
     }
   });
 
-  test('server block is enforced again before Connect', () async {
+  test('real-delay testing leaves testing state within five seconds', () async {
     final directory = await Directory.systemTemp.createTemp(
-      'niraN-blocked-connect-test-',
+      'niraN-ping-timeout-',
     );
-    final host = _FakeWindowsHost();
-    final access = _AllowedRemoteAccess();
+    final events = <Map<dynamic, dynamic>>[];
     try {
       await _seedConnectableServer(directory);
       final backend = WindowsPlatformBackend(
-        remoteAccess: access,
+        remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
         localPortPreflight: (_) async {},
-        host: host,
+        host: _FakeWindowsHost(),
         dataDirectory: directory,
+        proxyReadinessProbe: (_) => Completer<void>().future,
       );
       await backend.initialize();
-      access.failure = const DeviceAccessException(
-        'blocked_by_administrator',
-        'This Windows device has been blocked by the administrator',
-      );
-
-      await expectLater(
-        backend.connect('server'),
-        throwsA(isA<DeviceAccessException>()),
-      );
-      expect(host.calls, isNot(contains('start')));
-      expect(access.checks, 2);
+      final subscription = backend.events.listen(events.add);
+      final watch = Stopwatch()..start();
+      await backend.pingServer('server');
+      watch.stop();
+      await subscription.cancel();
+      expect(watch.elapsed, lessThan(const Duration(seconds: 6)));
+      final pingEvents = events
+          .where((event) => event['type'] == 'serverPing')
+          .map((event) => event['data'] as Map)
+          .toList();
+      expect(pingEvents.first['status'], 'testing');
+      expect(pingEvents.last['status'], 'timeout');
     } finally {
       await directory.delete(recursive: true);
     }
   });
+
+  test('repeated Xray log lines are throttled in the UI log buffer', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-log-dedup-test-',
+    );
+    final host = _FakeWindowsHost();
+    try {
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        host: host,
+        dataDirectory: directory,
+      );
+      await backend.initialize();
+      host.coreLogs.add('repeated tun route error');
+      await backend.getLogs();
+      host.coreLogs.add('repeated tun route error');
+      final logs = await backend.getLogs();
+      expect(
+        logs.whereType<Map>().where(
+          (entry) => '${entry['message']}'.contains('repeated tun'),
+        ),
+        hasLength(1),
+      );
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test(
+    'Connect uses cached access and does not add a network request',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-blocked-connect-test-',
+      );
+      final host = _FakeWindowsHost();
+      final access = _AllowedRemoteAccess();
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: access,
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+          proxyReadinessProbe: (_) async {},
+        );
+        await backend.initialize();
+        await Future<void>.delayed(Duration.zero);
+        access.failure = const DeviceAccessException(
+          'blocked_by_administrator',
+          'This Windows device has been blocked by the administrator',
+        );
+
+        final checksBeforeConnect = access.checks;
+        await backend.connect('server');
+        expect(host.calls, contains('start'));
+        expect(access.checks, checksBeforeConnect);
+        await backend.disconnect();
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 
   test(
     'block discovered during refresh stops Core and emits access gate',
@@ -565,10 +997,70 @@ void main() {
       host.calls.clear();
 
       await backend.connect('server');
-      expect(host.calls, ['start:tun', 'ready:10809']);
+      expect(host.calls, [
+        'validateTun',
+        'stopSpeedtest',
+        'start:tun',
+        'ready:10809',
+      ]);
 
       await backend.disconnect();
-      expect(host.calls, ['start:tun', 'ready:10809', 'disable', 'stop']);
+      expect(host.calls, [
+        'validateTun',
+        'stopSpeedtest',
+        'start:tun',
+        'ready:10809',
+        'disable',
+        'stop',
+        'stopSpeedtest',
+      ]);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('TUN ping uses the active Xray proxy without a second Core', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-tun-ping-test-',
+    );
+    final host = _FakeWindowsHost();
+    final events = <Map<dynamic, dynamic>>[];
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+        proxyReadinessProbe: (port) async => host.calls.add('ready:$port'),
+        tunReadinessProbe: () async {},
+        endpointLatencyProbe: (_) async => 999,
+        realDelayProbe: (port) async {
+          expect(port, 10809);
+          return 42;
+        },
+      );
+      await backend.initialize();
+      await backend.updateSettings({
+        'tunEnabled': true,
+        'systemProxyEnabled': false,
+      });
+      await backend.connect('server');
+      host.calls.clear();
+      final subscription = backend.events.listen(events.add);
+
+      await backend.pingServer('server');
+
+      await subscription.cancel();
+      expect(host.calls, isNot(contains('startSpeedtest')));
+      expect(
+        events
+            .where((event) => event['type'] == 'serverPing')
+            .map((event) => event['data'] as Map)
+            .last,
+        containsPair('ping', 42),
+      );
     } finally {
       await directory.delete(recursive: true);
     }
@@ -650,6 +1142,51 @@ void main() {
         containsPair('tunEnabled', false),
       );
       await backend.disconnect();
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('TUN prerequisite failure before connect never starts Core', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-tun-connect-preflight-test-',
+    );
+    final host = _FakeWindowsHost();
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+        proxyReadinessProbe: (_) async {},
+      );
+      await backend.initialize();
+      await backend.updateSettings({'tunEnabled': true});
+      host.calls.clear();
+      host.tunValidationFailure = PlatformException(
+        code: 'tun_privilege',
+        message: 'TUN mode requires administrator privileges.',
+      );
+
+      await expectLater(
+        backend.connect('server'),
+        throwsA(
+          isA<PlatformException>().having(
+            (error) => error.code,
+            'code',
+            'tun_privilege',
+          ),
+        ),
+      );
+
+      expect(host.calls, ['validateTun', 'disable', 'stop']);
+      expect(host.running, isFalse);
+      expect(
+        (await backend.initialize())['connection'],
+        containsPair('state', 'error'),
+      );
     } finally {
       await directory.delete(recursive: true);
     }
@@ -760,7 +1297,16 @@ void main() {
                   '{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","length":"1-1","delay":"1-2"}}]}',
             },
           ),
-          settings: _settings(),
+          settings: {
+            ..._settings(),
+            'dnsQueryStrategy': 'UseSystem',
+            'dnsParallelQuery': true,
+            'dnsServeStale': true,
+            'directTargetStrategy': 'UseIPv4',
+            'proxyTargetStrategy': 'UseIP',
+            'proxyDialStrategy': 'UseIP',
+            'happyEyeballs': true,
+          },
         ),
       );
       final result = await Process.run(xray.absolute.path, [
@@ -770,6 +1316,56 @@ void main() {
         config.path,
       ]);
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('official bundled Xray accepts the Windows TUN schema', () async {
+    final xray = File('windows/xray/bin/xray-v26.7.28.exe');
+    if (!await xray.exists()) return;
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-xray-tun-test-',
+    );
+    try {
+      for (final mode in const ['global', 'bypassIran']) {
+        final config = File('${directory.path}\\config-$mode.json');
+        await config.writeAsString(
+          builder.build(
+            server: WindowsServerRecord(
+              id: 'server',
+              name: 'Server',
+              country: 'DE',
+              protocol: 'vless',
+              address: 'example.com',
+              port: 443,
+              credential: '00000000-0000-4000-8000-000000000001',
+              transport: 'tcp',
+              security: 'tls',
+              parameters: const {'sni': 'example.com'},
+            ),
+            settings: {
+              ..._settings(),
+              'tunEnabled': true,
+              'enableUdp': false,
+              'routingMode': mode,
+              'vpnInterfaceIpv6Address': 'fdfe:dcba:9876::5/126',
+            },
+            iranCidrs: const ['2.144.0.0/14', '2001:470:1f0b::/48'],
+          ),
+        );
+        final result = await Process.run(xray.absolute.path, [
+          'run',
+          '-test',
+          '-c',
+          config.path,
+        ]);
+        expect(
+          result.exitCode,
+          0,
+          reason: '$mode: ${result.stdout}\n${result.stderr}',
+        );
+      }
     } finally {
       await directory.delete(recursive: true);
     }
@@ -788,6 +1384,7 @@ Map<String, Object?> _settings() => {
   'localHttpPort': 10809,
   'vpnDns': '1.1.1.1',
   'vpnInterfaceAddress': '10.10.14.1/30',
+  'vpnInterfaceIpv6Address': 'fdfe:dcba:9876::1/126',
   'vpnMtu': 1500,
   'domainStrategy': 'AsIs',
   'sniffingEnabled': true,
@@ -828,11 +1425,13 @@ Future<void> _seedConnectableServer(Directory directory) async {
 
 final class _FakeWindowsHost implements WindowsNativeHostApi {
   final List<String> calls = [];
+  final List<String> coreLogs = [];
   bool running = false;
   Object? enableFailure;
   Object? disableFailure;
   Object? tunValidationFailure;
   String proxyState = 'niran';
+  String coreVersion = 'v26.7.28';
 
   @override
   Future<Map<dynamic, dynamic>> getBuildConfig() async => {
@@ -840,6 +1439,7 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
     'telegramUrl': '',
     'telegramContact': '',
     'appVersion': '0.1.0',
+    'expectedCoreVersion': 'v26.7.28',
   };
 
   @override
@@ -855,13 +1455,17 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   }
 
   @override
-  Future<String> getXrayVersion() async => 'v26.7.28';
+  Future<String> getXrayVersion() async => coreVersion;
 
   @override
   Future<bool> recoverSystemProxy() async => false;
 
   @override
-  Future<List<String>> drainXrayLogs() async => const [];
+  Future<List<String>> drainXrayLogs() async {
+    final result = List<String>.of(coreLogs);
+    coreLogs.clear();
+    return result;
+  }
 
   @override
   Future<Map<dynamic, dynamic>> getXrayStatus() async => {
@@ -926,6 +1530,27 @@ final class _AllowedRemoteAccess implements RemoteAccessController {
   Future<void> requireAllowed() async {
     checks++;
     if (failure case final error?) throw error;
+  }
+
+  @override
+  Future<RemoteSubscription> fetchSubscription() async {
+    await requireAllowed();
+    return const RemoteSubscription([], null);
+  }
+}
+
+final class _DelayedRemoteAccess implements RemoteAccessController {
+  final Completer<void> _completer = Completer<void>();
+  bool started = false;
+
+  void complete() {
+    if (!_completer.isCompleted) _completer.complete();
+  }
+
+  @override
+  Future<void> requireAllowed() {
+    started = true;
+    return _completer.future;
   }
 
   @override

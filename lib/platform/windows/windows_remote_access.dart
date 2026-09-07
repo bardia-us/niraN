@@ -135,7 +135,12 @@ final class WindowsRemoteAccessService
     final accepted =
         _record?['consent_accepted'] == true &&
         _record?['consent_version'] == _consentVersion;
-    if (accepted) await requireAllowed();
+    if (accepted && _record?['remote_access_state'] == 'blocked') {
+      throw const DeviceAccessException(
+        'blocked_by_administrator',
+        'This Windows device has been blocked by the administrator',
+      );
+    }
     return accepted;
   }
 

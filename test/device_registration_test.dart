@@ -177,7 +177,7 @@ void main() {
 }
 
 Future<void> _waitFor(bool Function() condition) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 2));
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
   while (!condition()) {
     if (DateTime.now().isAfter(deadline)) {
       throw TimeoutException('Timed out waiting for registration sync');

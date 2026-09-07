@@ -42,6 +42,78 @@ trojan://password@two.example:443?security=tls#Two
   });
 
   test(
+    'informational VLESS stays visible but is rejected at connect boundary',
+    () {
+      final record = parser
+          .parse(
+            'vless://id@1.1.1.1:443?security=tls&type=tcp#'
+            '${Uri.encodeComponent('هر دفعه آپدیت کنید - V4.8')}',
+          )
+          .single;
+      expect(record.address, '1.1.1.1');
+      expect(record.rejectionReason, contains('information only'));
+    },
+  );
+
+  test('XHTTP Extra and Reality ML-DSA fields reach their Xray schema', () {
+    final xhttp = parser
+        .parse(
+          'vless://id@example.com:443?security=tls&type=xhttp'
+          '&extra=${Uri.encodeQueryComponent('{"noSSEHeader":false}')}'
+          '&fp=android#XHTTP',
+        )
+        .single;
+    final xhttpJson =
+        jsonDecode(builder.build(server: xhttp, settings: settings)) as Map;
+    final xhttpStream =
+        ((xhttpJson['outbounds'] as List).first as Map)['streamSettings']
+            as Map;
+    expect(xhttpStream['xhttpSettings']['extra']['noSSEHeader'], isFalse);
+    expect(xhttpStream['tlsSettings']['fingerprint'], 'android');
+
+    final reality = parser
+        .parse(
+          'vless://id@example.com:443?security=reality&type=tcp'
+          '&pbk=public-key&pqv=verify-key&fp=qq#Reality',
+        )
+        .single;
+    final realityJson =
+        jsonDecode(builder.build(server: reality, settings: settings)) as Map;
+    final realityStream =
+        ((realityJson['outbounds'] as List).first as Map)['streamSettings']
+            as Map;
+    expect(realityStream['realitySettings']['mldsa65Verify'], 'verify-key');
+    expect(realityStream['realitySettings']['fingerprint'], 'qq');
+    expect(realityStream['realitySettings'], isNot(contains('cipherSuites')));
+  });
+
+  test('Direct DNS is opt-in and mapped without replacing remote DNS', () {
+    final server = parser
+        .parse('vless://id@example.com:443?security=tls&type=ws#Server')
+        .single;
+    final json =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ...settings,
+                  'directDnsEnabled': true,
+                  'directDnsAddress': '178.22.122.100',
+                },
+              ),
+            )
+            as Map;
+    final dnsServers = (json['dns'] as Map)['servers'] as List;
+    expect(
+      dnsServers.whereType<Map>().any(
+        (entry) => entry['address'] == '178.22.122.100',
+      ),
+      isTrue,
+    );
+    expect(dnsServers, contains('https://dns.google/dns-query'));
+  });
+
+  test(
     'parses SIP002 and legacy Shadowsocks with special unicode passwords',
     () {
       final credentials = base64Url
@@ -111,6 +183,86 @@ trojan://p@three.example:443?security=tls#Third
     },
   );
 
+  test(
+    'informational entries keep subscription position without manual order',
+    () {
+      final refreshed = parser.parse('''
+vless://a@one.example:443?security=tls&type=ws#First
+vless://notice@1.1.1.1:443?security=none&type=tcp#${Uri.encodeComponent('هر دفعه آپدیت کنید - V4.8')}
+trojan://p@three.example:443?security=tls#Third
+''');
+      final ordered = const WindowsServerOrderPolicy().reconcile(
+        preferredIds: const [],
+        previous: const [],
+        refreshed: refreshed,
+      );
+      expect(ordered.map((item) => item.name), [
+        'First',
+        'هر دفعه آپدیت کنید - V4.8',
+        'Third',
+      ]);
+      expect(ordered[1].rejectionReason, contains('information only'));
+    },
+  );
+
+  test('new informational entry is not appended after a manual order', () {
+    final previous = parser.parse('''
+vless://a@one.example:443?security=tls&type=ws#First
+trojan://p@three.example:443?security=tls#Third
+''');
+    final refreshed = parser.parse('''
+vless://a@one.example:443?security=tls&type=ws#First
+vless://notice@1.1.1.1:443?security=none&type=tcp#${Uri.encodeComponent('هر دفعه آپدیت کنید - V4.8')}
+trojan://p@three.example:443?security=tls#Third
+''');
+    final ordered = const WindowsServerOrderPolicy().reconcile(
+      preferredIds: [previous[1].id, previous[0].id],
+      previous: previous,
+      refreshed: refreshed,
+    );
+    expect(ordered.map((item) => item.name), [
+      'Third',
+      'هر دفعه آپدیت کنید - V4.8',
+      'First',
+    ]);
+  });
+
+  test('Xray DNS and resolution settings reach supported runtime fields', () {
+    final server = parser
+        .parse('vless://id@example.com:443?security=tls&type=ws#Server')
+        .single;
+    final root =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ...settings,
+                  'dnsQueryStrategy': 'UseSystem',
+                  'dnsParallelQuery': true,
+                  'dnsServeStale': true,
+                  'directTargetStrategy': 'UseIPv4',
+                  'proxyTargetStrategy': 'UseIP',
+                  'proxyDialStrategy': 'UseIP',
+                  'happyEyeballs': true,
+                },
+              ),
+            )
+            as Map;
+    expect(root['dns'], containsPair('queryStrategy', 'UseSystem'));
+    expect(root['dns'], containsPair('enableParallelQuery', true));
+    expect(root['dns'], containsPair('serveStale', true));
+    final outbounds = (root['outbounds'] as List).whereType<Map>().toList();
+    final proxy = outbounds.singleWhere((item) => item['tag'] == 'proxy');
+    final direct = outbounds.singleWhere((item) => item['tag'] == 'direct');
+    expect(proxy['targetStrategy'], 'UseIP');
+    expect(proxy['streamSettings']['sockopt']['domainStrategy'], 'UseIP');
+    expect(
+      proxy['streamSettings']['sockopt']['happyEyeballs'],
+      containsPair('tryDelayMs', 250),
+    );
+    expect(direct['settings']['targetStrategy'], 'UseIPv4');
+  });
+
   test('bundled Xray validates newly supported protocol configs', () async {
     if (!Platform.isWindows) return;
     final xray = File('windows/xray/bin/xray-v26.7.28.exe');
@@ -142,6 +294,43 @@ hy2://secret@hy.example:443?sni=hy.example#HY2
           reason: '${record.protocol}: ${result.stdout}\n${result.stderr}',
         );
       }
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('bundled Xray accepts Fragment maxSplit runtime schema', () async {
+    if (!Platform.isWindows) return;
+    final xray = File('windows/xray/bin/xray-v26.7.28.exe');
+    if (!await xray.exists()) return;
+    final server = parser
+        .parse('vless://id@example.com:443?security=tls&type=ws#Fragment')
+        .single;
+    final directory = await Directory.systemTemp.createTemp('niraN-fragment-');
+    try {
+      final file = File(
+        '${directory.path}${Platform.pathSeparator}fragment.json',
+      );
+      await file.writeAsString(
+        builder.build(
+          server: server,
+          settings: {
+            ...settings,
+            'fragmentEnabled': true,
+            'fragmentPackets': 'tlshello',
+            'fragmentLength': '10-20',
+            'fragmentInterval': '0-5',
+            'fragmentMaxSplit': '2-4',
+          },
+        ),
+      );
+      final result = await Process.run(xray.absolute.path, [
+        'run',
+        '-test',
+        '-c',
+        file.path,
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     } finally {
       await directory.delete(recursive: true);
     }

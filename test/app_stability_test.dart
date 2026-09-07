@@ -34,6 +34,18 @@ const _serverB = ServerInfo(
   status: 'idle',
 );
 
+const _serverC = ServerInfo(
+  id: 'c',
+  name: 'Server C',
+  country: 'NL',
+  protocol: 'Trojan',
+  transport: 'TCP',
+  security: 'TLS',
+  port: 443,
+  selected: false,
+  status: 'idle',
+);
+
 class _FakeAppController extends AppController {
   _FakeAppController({
     this.language = 'en',
@@ -41,6 +53,7 @@ class _FakeAppController extends AppController {
     this.themeMode = 'system',
     this.performanceMode = false,
     this.connection = const ConnectionInfo(),
+    this.initialServers = const [_serverA, _serverB],
   });
 
   final String language;
@@ -48,14 +61,16 @@ class _FakeAppController extends AppController {
   final String themeMode;
   final bool performanceMode;
   final ConnectionInfo connection;
+  final List<ServerInfo> initialServers;
   int pingRequests = 0;
   int settingsUpdates = 0;
   int logRefreshes = 0;
   int restartRequests = 0;
+  final List<(int, int)> reorderRequests = [];
 
   @override
   Future<AppSnapshot> build() async => AppSnapshot(
-    servers: const [_serverA, _serverB],
+    servers: initialServers,
     connection: connection,
     subscriptionConfigured: true,
     settings: NativeSettings(
@@ -88,6 +103,17 @@ class _FakeAppController extends AppController {
         ],
       ),
     );
+  }
+
+  @override
+  Future<void> reorderServers(int oldIndex, int newIndex) async {
+    reorderRequests.add((oldIndex, newIndex));
+    final current = state.asData!.value;
+    final target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    final servers = List<ServerInfo>.of(current.servers);
+    final item = servers.removeAt(oldIndex);
+    servers.insert(target, item);
+    state = AsyncData(current.copyWith(servers: servers));
   }
 
   @override
@@ -325,6 +351,35 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('server reorder starts immediately only from keyed handles', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(
+            () => _FakeAppController(
+              initialServers: const [_serverA, _serverB, _serverC],
+            ),
+          ),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.dns_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ReorderableDragStartListener), findsNWidgets(3));
+    expect(find.byType(ReorderableDelayedDragStartListener), findsNothing);
+    for (final id in const ['a', 'b', 'c']) {
+      final handle = find.byKey(ValueKey('server-drag-$id'));
+      expect(handle, findsOneWidget);
+      expect(tester.widget(handle), isA<ReorderableDragStartListener>());
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('server toolbar actions stay pinned to the far right', (
     tester,
   ) async {
@@ -501,6 +556,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.settings_outlined));
       await tester.pumpAndSettle();
+      await _expandSettingsSection(tester, 'Appearance');
       await tester.scrollUntilVisible(
         find.text('Theme'),
         300,
@@ -560,6 +616,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
+    await _expandSettingsSection(tester, 'DNS');
     await tester.scrollUntilVisible(
       find.text('Remote DNS'),
       250,
@@ -691,6 +748,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
+    await _expandSettingsSection(tester, 'Routing');
     await tester.scrollUntilVisible(
       find.text('Routing'),
       250,
@@ -710,11 +768,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.state.asData!.value.settings.routingMode, 'bypassIran');
 
+    await Scrollable.ensureVisible(
+      tester.element(find.text('ROUTING')),
+      alignment: .35,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ROUTING'));
+    await tester.pumpAndSettle();
+    await _expandSettingsSection(
+      tester,
+      'DNS',
+      visibleChild: 'Domain strategy',
+    );
     await tester.scrollUntilVisible(
       find.text('Domain strategy'),
       220,
       scrollable: find.byType(Scrollable).first,
     );
+    await Scrollable.ensureVisible(
+      tester.element(find.text('Domain strategy')),
+      alignment: .5,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Domain strategy'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('IPOnDemand').last);
@@ -823,6 +898,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.settings_outlined));
       await tester.pumpAndSettle();
+      await _expandSettingsSection(tester, 'Appearance');
       await tester.scrollUntilVisible(
         find.text('Theme'),
         240,
@@ -850,4 +926,25 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+}
+
+Future<void> _expandSettingsSection(
+  WidgetTester tester,
+  String title, {
+  String? visibleChild,
+}) async {
+  final section = find.text(title.toUpperCase());
+  await tester.scrollUntilVisible(
+    section,
+    220,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await Scrollable.ensureVisible(tester.element(section), alignment: .4);
+  await tester.pumpAndSettle();
+  await tester.tap(section);
+  await tester.pumpAndSettle();
+  if (visibleChild != null && find.text(visibleChild).evaluate().isEmpty) {
+    await tester.tap(section);
+    await tester.pumpAndSettle();
+  }
 }

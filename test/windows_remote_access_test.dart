@@ -95,9 +95,10 @@ void main() {
       restarted.initialize(),
       throwsA(isA<DeviceAccessException>()),
     );
-    expect(transport.payloads, hasLength(callsAfterBlock + 1));
+    expect(transport.payloads, hasLength(callsAfterBlock));
 
     transport.blocked = false;
+    await restarted.requireAllowed();
     expect(await restarted.initialize(), isTrue);
     expect(transport.payloads.last['action'], 'status');
   });

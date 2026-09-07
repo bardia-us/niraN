@@ -2,74 +2,115 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
-typedef DelayCommandRunner =
-    Future<({int exitCode, String stdout})> Function(
-      List<String> arguments,
-      Duration timeout,
-    );
+typedef DelayHttpProbe =
+    Future<int> Function(Uri target, int proxyPort, Duration timeout);
+typedef DelayTrace = void Function(String phase, int elapsedMs, String detail);
 
-/// Measures v2rayN-style Real Delay through one dedicated local HTTP proxy.
-/// Core startup and listener warm-up are intentionally handled by the caller.
+/// Measures stable proxy latency through one dedicated local Xray proxy.
+/// The median of one cold and two warm header timings avoids both cold-start
+/// inflation and the artificial near-zero minimum produced by reused sessions.
 Future<int> measureWindowsRealDelay({
   required Uri target,
-  required int socksPort,
+  required int proxyPort,
   required Duration timeout,
-  DelayCommandRunner? commandRunner,
+  DelayHttpProbe? probe,
+  DelayTrace? trace,
 }) async {
-  final runner = commandRunner ?? _runCurl;
-  final seconds = max(1, timeout.inSeconds);
-  final arguments = [
-    '--silent',
-    '--show-error',
-    '--fail',
-    '--output',
-    'NUL',
-    '--socks5-hostname',
-    '127.0.0.1:$socksPort',
-    '--connect-timeout',
-    '3',
-    '--max-time',
-    '$seconds',
-    '--write-out',
-    '%{time_total}\n',
-    target.toString(),
-    target.toString(),
-  ];
+  final total = Stopwatch()..start();
   try {
-    final result = await runner(
-      arguments,
-      timeout + const Duration(seconds: 1),
+    trace?.call('dns', total.elapsedMilliseconds, 'delegated_to_xray');
+    trace?.call('http_start', total.elapsedMilliseconds, 'three_samples');
+    final delay =
+        await (probe != null
+                ? probe(target, proxyPort, timeout)
+                : _probeWithHttpClient(target, proxyPort, timeout, trace))
+            .timeout(timeout + const Duration(milliseconds: 250));
+    trace?.call(
+      delay > 0 ? 'complete' : 'failed',
+      total.elapsedMilliseconds,
+      delay > 0 ? 'ok' : 'invalid_response',
     );
-    if (result.exitCode != 0) return -1;
-    final samples = result.stdout
-        .split(RegExp(r'\s+'))
-        .map(double.tryParse)
-        .whereType<double>()
-        .map((seconds) => max(1, (seconds * 1000).round()))
-        .toList(growable: false);
-    return samples.length == 2 ? samples.reduce(min) : -1;
-  } on Object {
+    return delay > 0 ? max(1, delay) : -1;
+  } on TimeoutException {
+    trace?.call('timeout', total.elapsedMilliseconds, 'deadline');
+    return -1;
+  } on Object catch (error) {
+    final detail = error is HandshakeException
+        ? 'tls_${error.message.replaceAll(RegExp(r'[^a-zA-Z0-9 _-]'), '').trim()}'
+        : error.runtimeType.toString();
+    trace?.call('failed', total.elapsedMilliseconds, detail);
     return -1;
   }
 }
 
-Future<({int exitCode, String stdout})> _runCurl(
-  List<String> arguments,
+Future<int> _probeWithHttpClient(
+  Uri target,
+  int proxyPort,
   Duration timeout,
+  DelayTrace? trace,
 ) async {
-  final process = await Process.start('curl.exe', arguments);
-  final stdoutFuture = process.stdout.transform(systemEncoding.decoder).join();
-  process.stderr.drain<void>();
+  final client = HttpClient()
+    ..connectionTimeout = Duration(
+      milliseconds: min(timeout.inMilliseconds, 3000),
+    )
+    ..idleTimeout = timeout
+    ..findProxy = (_) => 'PROXY 127.0.0.1:$proxyPort';
+  final total = Stopwatch()..start();
+  final samples = <int>[];
   try {
-    final exitCode = await process.exitCode.timeout(timeout);
-    return (exitCode: exitCode, stdout: await stdoutFuture);
-  } on TimeoutException {
-    process.kill();
-    try {
-      await process.exitCode.timeout(const Duration(seconds: 1));
-    } on TimeoutException {
-      process.kill(ProcessSignal.sigkill);
+    for (var sample = 0; sample < 3; sample++) {
+      final remaining = timeout - total.elapsed;
+      if (remaining <= Duration.zero) break;
+      final connectionWatch = Stopwatch()..start();
+      try {
+        final request = await client.getUrl(target).timeout(remaining);
+        connectionWatch.stop();
+        trace?.call(
+          'tcp_connection',
+          total.elapsedMilliseconds,
+          'sample_${sample + 1}_${connectionWatch.elapsedMilliseconds}ms',
+        );
+        request.followRedirects = true;
+        final responseWatch = Stopwatch()..start();
+        trace?.call(
+          'proxy_request',
+          total.elapsedMilliseconds,
+          'sample_${sample + 1}',
+        );
+        final response = await request.close().timeout(remaining);
+        responseWatch.stop();
+        trace?.call(
+          'response_headers',
+          total.elapsedMilliseconds,
+          'sample_${sample + 1}_status_${response.statusCode}_${responseWatch.elapsedMilliseconds}ms',
+        );
+        await response.drain<void>().timeout(remaining);
+        trace?.call(
+          'request_complete',
+          total.elapsedMilliseconds,
+          'sample_${sample + 1}',
+        );
+        if (response.statusCode >= 200 && response.statusCode < 400) {
+          samples.add(max(1, responseWatch.elapsedMilliseconds));
+        }
+      } on Object catch (error) {
+        trace?.call(
+          'sample_failed',
+          total.elapsedMilliseconds,
+          'sample_${sample + 1}_${error.runtimeType}',
+        );
+      }
+      if (sample < 2) {
+        final pause = timeout - total.elapsed;
+        if (pause > const Duration(milliseconds: 75)) {
+          await Future<void>.delayed(const Duration(milliseconds: 75));
+        }
+      }
     }
-    return (exitCode: -1, stdout: '');
+    if (samples.isEmpty) return -1;
+    samples.sort();
+    return samples[samples.length ~/ 2];
+  } finally {
+    client.close(force: true);
   }
 }

@@ -358,9 +358,9 @@ final class WindowsSubscriptionParser {
       parameters: Map.unmodifiable(parameters),
       queryEntries: queryEntries,
     );
-    if (record.rejectionReason != null) {
-      throw FormatException(record.rejectionReason!);
-    }
+    // Informational entries remain visible, as they do in the source
+    // subscription. The connection boundary rejects them using
+    // [WindowsServerRecord.rejectionReason], so they can never reach Xray.
     return record;
   }
 

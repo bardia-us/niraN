@@ -16,11 +16,18 @@ import '../vpn/app_controller.dart';
 import 'server_information_screen.dart';
 import 'server_profile_settings_screen.dart';
 
-class ServersScreen extends ConsumerWidget {
+class ServersScreen extends ConsumerStatefulWidget {
   const ServersScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServersScreen> createState() => _ServersScreenState();
+}
+
+class _ServersScreenState extends ConsumerState<ServersScreen> {
+  bool _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
     final view = ref.watch(
       appControllerProvider.select((value) {
         final app = value.asData?.value;
@@ -63,12 +70,9 @@ class ServersScreen extends ConsumerWidget {
                     context,
                     () => controller.reorderServers(oldIndex, newIndex),
                   ),
-                  proxyDecorator: (child, index, animation) => Material(
-                    color: Colors.transparent,
-                    elevation: view.performanceMode ? 0 : 2,
-                    borderRadius: BorderRadius.circular(13),
-                    child: child,
-                  ),
+                  onReorderStart: (_) => setState(() => _dragging = true),
+                  onReorderEnd: (_) => setState(() => _dragging = false),
+                  proxyDecorator: (child, index, animation) => child,
                   itemBuilder: (context, index) {
                     final server = app.servers[index];
                     final brightness = Theme.of(context).brightness;
@@ -78,6 +82,13 @@ class ServersScreen extends ConsumerWidget {
                       child: RepaintBoundary(
                         child: InteractiveDepth(
                           radius: 13,
+                          enabled: !_dragging,
+                          reducedEffects: view.performanceMode,
+                          // Transforming the row while the handle's long-press
+                          // recognizer is active makes desktop reorder gestures
+                          // unreliable. Keep hover depth, but let the handle own
+                          // the press sequence without moving its render box.
+                          pressEnabled: false,
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onSecondaryTapDown: (details) =>
@@ -137,14 +148,20 @@ class ServersScreen extends ConsumerWidget {
                                       children: [
                                         _Latency(server: server),
                                         ReorderableDragStartListener(
+                                          key: ValueKey(
+                                            'server-drag-${server.id}',
+                                          ),
                                           index: index,
                                           child: Tooltip(
                                             message: 'Drag to reorder',
-                                            child: const Padding(
-                                              padding: EdgeInsets.all(8),
-                                              child: Icon(
-                                                Icons.drag_indicator_rounded,
-                                                size: 20,
+                                            child: MouseRegion(
+                                              cursor: SystemMouseCursors.grab,
+                                              child: const Padding(
+                                                padding: EdgeInsets.all(8),
+                                                child: Icon(
+                                                  Icons.drag_indicator_rounded,
+                                                  size: 20,
+                                                ),
                                               ),
                                             ),
                                           ),

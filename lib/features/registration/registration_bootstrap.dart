@@ -85,8 +85,16 @@ class _NiranRegistrationBootstrapState
   void _retry() {
     setState(() {
       _error = null;
-      _initialization = _verifyAccess();
+      _initialization = _retryAccess();
     });
+  }
+
+  Future<bool> _retryAccess() async {
+    final coordinator = widget.coordinator;
+    if (coordinator is! RemoteAccessController) return _verifyAccess();
+    await (coordinator as RemoteAccessController).requireAllowed();
+    clearDeviceAccessBlocked();
+    return true;
   }
 
   Widget _consentApp(Widget home) => MaterialApp(

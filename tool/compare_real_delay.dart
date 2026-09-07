@@ -97,13 +97,39 @@ Future<void> main() async {
     process.stderr.drain<void>();
     await Future.wait(httpPorts.map(_waitForPort));
     await Future<void>.delayed(const Duration(seconds: 1));
+    for (var index = 0; index < httpPorts.length; index++) {
+      final curl = await Process.run('curl.exe', [
+        '--silent',
+        '--show-error',
+        '--output',
+        'NUL',
+        '--proxy',
+        'http://127.0.0.1:${httpPorts[index]}',
+        '--connect-timeout',
+        '3',
+        '--max-time',
+        '9',
+        '--write-out',
+        '%{http_code} %{time_total}',
+        target.toString(),
+      ]);
+      stdout.writeln(
+        'Server ${index + 1} curl control: exit=${curl.exitCode} '
+        '${curl.stdout.toString().trim()}',
+      );
+    }
     final timeoutSeconds = (speedItem?['SpeedTestTimeout'] as num?)?.toInt();
     final results = await Future.wait([
       for (var index = 0; index < matches.length; index++)
         measureWindowsRealDelay(
           target: target,
-          socksPort: socksPorts[index],
+          proxyPort: httpPorts[index],
           timeout: Duration(seconds: timeoutSeconds ?? 9),
+          trace: (phase, elapsedMs, detail) {
+            stdout.writeln(
+              'Server ${index + 1} trace: $phase ${elapsedMs}ms $detail',
+            );
+          },
         ),
     ]);
     for (var index = 0; index < matches.length; index++) {

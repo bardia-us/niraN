@@ -72,8 +72,12 @@ final class WindowsServerRecord {
       'update subscription',
       'update config',
     ];
-    if (noticeMarkers.any(normalizedName.contains)) {
-      return 'This entry is subscription information, not a connectable server';
+    final hasVersionMarker = RegExp(
+      r'(?:^|\s|[-–—])v?\d+(?:\.\d+){1,3}(?:\s|$)',
+      caseSensitive: false,
+    ).hasMatch(normalizedName);
+    if (hasVersionMarker && noticeMarkers.any(normalizedName.contains)) {
+      return 'This entry is for information only. Please select another server.';
     }
     if (const {
       '',

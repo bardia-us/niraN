@@ -21,14 +21,20 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     WindowsNativeHostApi? host,
     Directory? dataDirectory,
     Future<void> Function(int port)? proxyReadinessProbe,
+    Future<void> Function()? tunReadinessProbe,
     Future<void> Function(List<int> ports)? localPortPreflight,
+    Future<int> Function(WindowsServerRecord server)? endpointLatencyProbe,
+    Future<int> Function(int httpPort)? realDelayProbe,
     RemoteAccessController? remoteAccess,
     AutoStartController? autoStartController,
     bool autoStartCore = true,
   }) : _host = host ?? MethodChannelWindowsNativeHost(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _proxyReadinessProbe = proxyReadinessProbe,
+       _tunReadinessProbe = tunReadinessProbe,
        _localPortPreflight = localPortPreflight,
+       _endpointLatencyProbe = endpointLatencyProbe,
+       _realDelayProbe = realDelayProbe,
        _remoteAccess = remoteAccess ?? windowsRemoteAccess,
        _autoStartController =
            autoStartController ?? WindowsAutoStartController(),
@@ -43,11 +49,16 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
+  static const _realDelayBatchTimeout = Duration(seconds: 5);
+  static const _settingsSchemaVersion = 2;
 
   final WindowsNativeHostApi _host;
   final Directory _dataDirectory;
   final Future<void> Function(int port)? _proxyReadinessProbe;
+  final Future<void> Function()? _tunReadinessProbe;
   final Future<void> Function(List<int> ports)? _localPortPreflight;
+  final Future<int> Function(WindowsServerRecord server)? _endpointLatencyProbe;
+  final Future<int> Function(int httpPort)? _realDelayProbe;
   final RemoteAccessController _remoteAccess;
   final AutoStartController _autoStartController;
   final bool _autoStartCore;
@@ -60,8 +71,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   WindowsSubscriptionUsage _usage = const WindowsSubscriptionUsage();
   final Set<String> _hiddenIds = {};
   final Map<String, Map<String, String>> _profileOverrides = {};
+  final Map<bool, List<String>> _iranCidrsCache = {};
   List<String> _manualOrderIds = [];
   final List<Map<String, Object?>> _logs = [];
+  final Map<String, int> _recentCoreLogs = {};
   Map<String, Object?> _settings = _defaultSettings();
   Map<String, Object?> _buildConfig = {};
   String? _selectedId;
@@ -69,6 +82,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   int _openCount = 0;
   int _pingGeneration = 0;
   String _coreVersion = 'Unavailable';
+  String? _coreVersionMismatch;
   String _appVersion = _appVersionFallback;
   String? _subscriptionError;
   Map<String, Object?> _connection = _disconnectedConnection();
@@ -79,6 +93,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   bool _transitioning = false;
   bool _expectXray = false;
   bool _pollingXray = false;
+  Future<Map<dynamic, dynamic>>? _subscriptionRefresh;
+  Future<void>? _startupCompletion;
+  Future<void>? _coreCheck;
+  HttpClient? _publicIpClient;
 
   @override
   Stream<Map<dynamic, dynamic>> get events => _events.stream;
@@ -95,7 +113,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (_initialized) return _bootstrap();
     if (_traySubscription?.isPaused == true) _traySubscription?.resume();
     await _dataDirectory.create(recursive: true);
-    final recoveredFuture = _host.recoverSystemProxy();
+    final recoveredFuture = _host.recoverSystemProxy().catchError((
+      Object error,
+    ) {
+      _log('warning', 'Windows proxy recovery check failed');
+      return false;
+    });
     await Future.wait([
       _loadState(),
       _loadSubscriptionCache(),
@@ -103,15 +126,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
       })(),
     ]);
-    final recovered = await recoveredFuture;
     _buildConfig = Map<String, Object?>.from(await _host.getBuildConfig());
     _appVersion = '${_buildConfig['appVersion'] ?? _appVersionFallback}';
-    try {
-      await _remoteAccess.requireAllowed();
-    } on Object catch (error) {
-      await _enforceBlockedAccess(error);
-      rethrow;
-    }
     _settings = {
       ..._settings,
       'telegramUrlConfigured': _telegramUrl.isNotEmpty,
@@ -120,38 +136,60 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _settings['connectionMode'] = 'proxy';
     _settings['enableLocalDns'] = true;
     _settings['enableFakeDns'] = false;
+    final recovered = await recoveredFuture;
     await _syncSystemProxyState(emit: false);
-    _coreVersion = await _host.getXrayVersion();
-    _openCount++;
     if (recovered) {
       _log('warning', 'Recovered Windows proxy settings after an unclean exit');
     }
-    if (_servers.isEmpty) {
-      try {
-        await _refreshSubscription(emit: false);
-      } on Object catch (error) {
-        _subscriptionError = _safeError(error);
-        _log('warning', 'Initial subscription update failed');
-      }
-    }
+    _openCount++;
     _ensureSelection();
     await _persistState();
     _initialized = true;
     _scheduleSubscriptionUpdates();
-    final selected = _server(_selectedId ?? '');
-    if (_autoStartCore && selected != null) {
-      try {
-        await _startConnection(selected);
-      } on Object {
-        // Home exposes Core startup errors and a retry action.
-      }
-    }
+    _startupCompletion ??= _completeStartup();
     return _bootstrap();
   }
 
+  Future<void> _completeStartup() async {
+    try {
+      await _remoteAccess.requireAllowed();
+    } on Object catch (error) {
+      if (await _enforceBlockedAccess(error)) return;
+      _log(
+        'warning',
+        'Startup access check unavailable; cached access retained',
+      );
+    }
+    try {
+      await _ensureCoreCompatibility();
+      if (_coreVersionMismatch != null) return;
+      _ensureSelection();
+      final selected = _server(_selectedId ?? '');
+      if (_autoStartCore &&
+          selected != null &&
+          _connection['state'] == 'disconnected') {
+        try {
+          await _startConnection(selected);
+        } on Object {
+          // Home exposes Core startup errors and a retry action.
+        }
+      }
+    } on Object catch (error) {
+      _log('warning', 'Background startup task failed: ${_safeError(error)}');
+    }
+  }
+
   @override
-  Future<Map<dynamic, dynamic>> refreshSubscription() =>
-      _refreshSubscription(emit: true);
+  Future<Map<dynamic, dynamic>> refreshSubscription() {
+    final active = _subscriptionRefresh;
+    if (active != null) return active;
+    late final Future<Map<dynamic, dynamic>> request;
+    request = _refreshSubscription(emit: true).whenComplete(() {
+      if (identical(_subscriptionRefresh, request)) _subscriptionRefresh = null;
+    });
+    _subscriptionRefresh = request;
+    return request;
+  }
 
   Future<Map<dynamic, dynamic>> _refreshSubscription({
     required bool emit,
@@ -369,10 +407,18 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   Future<void> _startConnection(WindowsServerRecord server) async {
+    final timing = Stopwatch()..start();
     _transitioning = true;
     _setConnection('preparing', server);
     try {
-      await _remoteAccess.requireAllowed();
+      await _ensureCoreCompatibility();
+      if (_coreVersionMismatch case final mismatch?) {
+        throw _platformError('core_version_mismatch', mismatch);
+      }
+      if (_tunEnabled) {
+        await _host.validateTunPrerequisites();
+        await _stopSpeedtestForTunTransition();
+      }
       _warnUnsupportedProfileFeatures(server);
       await _assertLocalProxyPortsAvailable();
       final cidrs = await _loadIranCidrs();
@@ -384,13 +430,34 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _xrayConfigFile.parent.create(recursive: true);
       await _xrayConfigFile.writeAsString(config, flush: true);
       _setConnection('connecting', server);
+      _log('info', 'Connection timing: Core startup requested');
       await _host.startXray(_xrayConfigFile.path, tunMode: _tunEnabled);
+      _log(
+        'info',
+        'Connection timing: Core started ${timing.elapsedMilliseconds}ms',
+      );
       _expectXray = true;
+      final proxyWait = Stopwatch()..start();
       await _awaitProxyPort(_localHttpPort);
+      _log(
+        'info',
+        'Connection timing: proxy ready ${proxyWait.elapsedMilliseconds}ms '
+            '(total ${timing.elapsedMilliseconds}ms)',
+      );
+      if (_tunEnabled) {
+        final tunWait = Stopwatch()..start();
+        await _awaitTunReady();
+        _log(
+          'info',
+          'Connection timing: TUN ready ${tunWait.elapsedMilliseconds}ms '
+              '(total ${timing.elapsedMilliseconds}ms)',
+        );
+      }
       if (_systemProxyEnabled) {
         await _host.enableSystemProxy(_localHttpPort);
       }
       _setConnection('connected', server);
+      _log('info', 'Connection timing: ready ${timing.elapsedMilliseconds}ms');
       _log(
         'info',
         _tunEnabled
@@ -399,16 +466,39 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       );
       _startMonitor();
       unawaited(_updatePublicIp(server));
+      if (_proxyReadinessProbe == null) {
+        unawaited(_pingConnectedServer(server));
+      }
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
       if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
-      _setConnection('error', server, error: _safeError(error));
+      _setConnection('error', server, error: _connectionUserError(error));
       _log('error', 'Connection failed: ${_safeError(error)}');
       rethrow;
     } finally {
       _transitioning = false;
     }
+  }
+
+  String _normalizedVersion(String value) =>
+      value.trim().toLowerCase().replaceFirst(RegExp(r'^v'), '');
+
+  Future<void> _ensureCoreCompatibility() =>
+      _coreCheck ??= _checkCoreCompatibility();
+
+  Future<void> _checkCoreCompatibility() async {
+    _coreVersion = await _host.getXrayVersion();
+    _emit('coreVersion', _coreVersion);
+    final expected = '${_buildConfig['expectedCoreVersion'] ?? ''}'.trim();
+    if (expected.isNotEmpty &&
+        _normalizedVersion(_coreVersion) != _normalizedVersion(expected)) {
+      _coreVersionMismatch =
+          'Bundled Xray Core $_coreVersion does not match expected $expected';
+      _log('error', _coreVersionMismatch!);
+      return;
+    }
+    _coreVersionMismatch = null;
   }
 
   @override
@@ -423,6 +513,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _setConnection('stopping', _activeServer);
     _expectXray = false;
     _monitor?.cancel();
+    _publicIpClient?.close(force: true);
+    _publicIpClient = null;
+    _pingGeneration++;
+    _resetTestingPings();
     Object? failure;
     try {
       await Future.wait([
@@ -438,6 +532,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             await _host.stopXray();
           } on Object catch (error) {
             failure ??= error;
+          }
+        })(),
+        (() async {
+          try {
+            await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
+          } on Object {
+            // The dedicated speed-test job is bounded by the native host.
           }
         })(),
       ]);
@@ -501,7 +602,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _transitioning = true;
     _setConnection(switching ? 'switching' : 'restarting', server);
     try {
-      await _remoteAccess.requireAllowed();
+      _publicIpClient?.close(force: true);
+      _publicIpClient = null;
+      if (_tunEnabled) {
+        await _host.validateTunPrerequisites();
+        await _stopSpeedtestForTunTransition();
+      }
       await _host.stopXray();
       await _collectCoreLogs();
       _warnUnsupportedProfileFeatures(server);
@@ -515,6 +621,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _host.startXray(_xrayConfigFile.path, tunMode: _tunEnabled);
       _expectXray = true;
       await _awaitProxyPort(_localHttpPort);
+      if (_tunEnabled) await _awaitTunReady();
       if (_systemProxyEnabled) {
         await _host.enableSystemProxy(_localHttpPort);
       }
@@ -522,11 +629,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _startMonitor();
       _log('info', switching ? 'Xray switched server' : 'Xray restarted');
       unawaited(_updatePublicIp(server));
+      if (_proxyReadinessProbe == null) {
+        unawaited(_pingConnectedServer(server));
+      }
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
       if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
-      _setConnection('error', server, error: _safeError(error));
+      _setConnection('error', server, error: _connectionUserError(error));
       rethrow;
     } finally {
       _transitioning = false;
@@ -550,7 +660,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     final server = _server(id);
     if (server == null) throw _platformError('not_found', 'Server not found');
     final generation = ++_pingGeneration;
-    await _runRealDelayBatch([server], generation);
+    if (_tunEnabled && _connection['state'] == 'connected') {
+      await _runTunSafeLatencyBatch([server], generation);
+    } else {
+      await _runRealDelayBatch([server], generation);
+    }
     if (generation == _pingGeneration) _emit('pingCompleted', true);
   }
 
@@ -558,23 +672,35 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<int> tcpPingServer(String id) async {
     final server = _server(id);
     if (server == null) throw _platformError('not_found', 'Server not found');
-    try {
-      final addresses = await InternetAddress.lookup(
-        server.address,
-      ).timeout(const Duration(seconds: 5));
-      if (addresses.isEmpty) return -1;
-      final watch = Stopwatch()..start();
-      final socket = await Socket.connect(
-        addresses.first,
-        server.port,
-        timeout: const Duration(seconds: 5),
-      );
-      watch.stop();
-      socket.destroy();
-      return max(1, watch.elapsedMilliseconds);
-    } on Object {
-      return -1;
+    final injected = _endpointLatencyProbe;
+    if (injected != null) {
+      try {
+        return await injected(
+          server,
+        ).timeout(const Duration(seconds: 5), onTimeout: () => -1);
+      } on Object {
+        return -1;
+      }
     }
+    return (() async {
+      try {
+        final addresses = await InternetAddress.lookup(
+          server.address,
+        ).timeout(const Duration(seconds: 3));
+        if (addresses.isEmpty) return -1;
+        final watch = Stopwatch()..start();
+        final socket = await Socket.connect(
+          addresses.first,
+          server.port,
+          timeout: const Duration(seconds: 4),
+        );
+        watch.stop();
+        socket.destroy();
+        return max(1, watch.elapsedMilliseconds);
+      } on Object {
+        return -1;
+      }
+    }()).timeout(const Duration(seconds: 5), onTimeout: () => -1);
   }
 
   @override
@@ -582,6 +708,20 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     final generation = ++_pingGeneration;
     final candidates = _visibleServers;
     final batchSize = _integerSetting('realPingConcurrency', 16);
+    if (_tunEnabled && _connection['state'] == 'connected') {
+      for (
+        var offset = 0;
+        offset < candidates.length && generation == _pingGeneration;
+        offset += batchSize
+      ) {
+        await _runTunSafeLatencyBatch(
+          candidates.skip(offset).take(batchSize).toList(growable: false),
+          generation,
+        );
+      }
+      if (generation == _pingGeneration) _emit('pingCompleted', true);
+      return;
+    }
     for (
       var offset = 0;
       offset < candidates.length && generation == _pingGeneration;
@@ -595,11 +735,47 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (generation == _pingGeneration) _emit('pingCompleted', true);
   }
 
+  Future<void> _runTunSafeLatencyBatch(
+    List<WindowsServerRecord> servers,
+    int generation,
+  ) async {
+    for (final server in servers) {
+      server
+        ..pingMs = null
+        ..pingStatus = 'testing';
+      _emitPing(server);
+    }
+    await Future.wait([
+      for (final server in servers)
+        () async {
+          final activeId = _connection['serverId']?.toString();
+          final delay = server.id == activeId
+              ? await _measureRealDelay(_localHttpPort, trace: true)
+              : await tcpPingServer(server.id);
+          if (generation != _pingGeneration) return;
+          server
+            ..pingMs = delay > 0 ? delay : null
+            ..pingStatus = delay > 0 ? 'success' : 'timeout';
+          _emitPing(server);
+        }().timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            if (generation != _pingGeneration) return;
+            server
+              ..pingMs = null
+              ..pingStatus = 'timeout';
+            _emitPing(server);
+          },
+        ),
+    ]);
+  }
+
   Future<void> _runRealDelayBatch(
     List<WindowsServerRecord> servers,
     int generation,
   ) async {
     if (servers.isEmpty) return;
+    var acceptResults = true;
     for (final server in servers) {
       server
         ..pingMs = null
@@ -610,33 +786,57 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     final socksPorts = ports.take(servers.length).toList(growable: false);
     final httpPorts = ports.skip(servers.length).toList(growable: false);
     try {
-      await _speedtestConfigFile.parent.create(recursive: true);
-      await _speedtestConfigFile.writeAsString(
-        _configBuilder.buildSpeedtest(
-          servers: servers,
-          settings: _settings,
-          socksPorts: socksPorts,
-          httpPorts: httpPorts,
-        ),
-        flush: true,
-      );
-      await _host.startSpeedtestXray(_speedtestConfigFile.path);
-      await Future.wait(httpPorts.map(_awaitProxyPort));
-      // Match v2rayN's Realping lifecycle: Core startup and listener readiness
-      // are outside the measured request, followed by a short warm-up period.
-      await Future<void>.delayed(const Duration(seconds: 1));
-      await Future.wait([
-        for (var index = 0; index < servers.length; index++)
-          () async {
-            final delay = await _measureRealDelay(socksPorts[index]);
-            if (generation != _pingGeneration) return;
-            servers[index]
-              ..pingMs = delay > 0 ? delay : null
-              ..pingStatus = delay > 0 ? 'success' : 'timeout';
-            _emitPing(servers[index]);
-          }(),
-      ]);
+      await (() async {
+        await _speedtestConfigFile.parent.create(recursive: true);
+        await _speedtestConfigFile.writeAsString(
+          _configBuilder.buildSpeedtest(
+            servers: servers,
+            settings: _settings,
+            socksPorts: socksPorts,
+            httpPorts: httpPorts,
+          ),
+          flush: true,
+        );
+        final coreTiming = Stopwatch()..start();
+        await _host.startSpeedtestXray(_speedtestConfigFile.path);
+        _log(
+          'info',
+          'Latency timing: test Core started ${coreTiming.elapsedMilliseconds}ms',
+        );
+        await Future.wait(httpPorts.map(_awaitProxyPort));
+        _log(
+          'info',
+          'Latency timing: proxies ready ${coreTiming.elapsedMilliseconds}ms',
+        );
+        // Match v2rayN's Realping lifecycle: Core startup and listener readiness
+        // are outside the measured request, followed by a very short warm-up.
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+        await Future.wait([
+          for (var index = 0; index < servers.length; index++)
+            () async {
+              final delay = await _measureRealDelay(httpPorts[index]);
+              if (!acceptResults || generation != _pingGeneration) return;
+              servers[index]
+                ..pingMs = delay > 0 ? delay : null
+                ..pingStatus = delay > 0 ? 'success' : 'timeout';
+              _emitPing(servers[index]);
+            }(),
+        ]);
+      }()).timeout(_realDelayBatchTimeout);
+    } on TimeoutException {
+      acceptResults = false;
+      if (generation == _pingGeneration) {
+        for (final server in servers.where(
+          (item) => item.pingStatus == 'testing',
+        )) {
+          server
+            ..pingMs = null
+            ..pingStatus = 'timeout';
+          _emitPing(server);
+        }
+      }
     } on Object catch (error) {
+      acceptResults = false;
       _log('warning', 'Real-delay batch failed: ${_safeError(error)}');
       if (generation == _pingGeneration) {
         for (final server in servers) {
@@ -648,7 +848,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       }
     } finally {
       try {
-        await _host.stopSpeedtestXray();
+        await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
       } on Object {
         // Dedicated native job owns only niraN speed-test Xray.
       }
@@ -658,18 +858,24 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  Future<int> _measureRealDelay(int socksPort) async {
+  Future<int> _measureRealDelay(int httpPort, {bool trace = false}) async {
+    final injected = _realDelayProbe;
+    if (injected != null) return injected(httpPort);
     final target = Uri.tryParse('${_settings['realDelayUrl'] ?? ''}');
     if (target == null || !const {'http', 'https'}.contains(target.scheme)) {
       return -1;
     }
-    final timeout = Duration(
-      seconds: _integerSetting('realDelayTimeoutSeconds', 8),
-    );
+    final configured = _integerSetting('realDelayTimeoutSeconds', 5);
+    final timeout = Duration(seconds: min(configured, 5));
     return measureWindowsRealDelay(
       target: target,
-      socksPort: socksPort,
+      proxyPort: httpPort,
       timeout: timeout,
+      trace: trace
+          ? (phase, elapsedMs, detail) {
+              _log('info', 'Latency timing: $phase ${elapsedMs}ms $detail');
+            }
+          : null,
     );
   }
 
@@ -694,13 +900,51 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   @override
   Future<void> cancelPing() async {
     _pingGeneration++;
+    unawaited(_host.stopSpeedtestXray());
+    _resetTestingPings();
+    _emit('pingCancelled', true);
+  }
+
+  Future<void> _stopSpeedtestForTunTransition() async {
+    _pingGeneration++;
+    _resetTestingPings();
+    try {
+      await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
+    } on Object {
+      // Native ownership prevents an orphan speed-test process.
+    }
+  }
+
+  void _resetTestingPings() {
     for (final server in _servers.where(
       (item) => item.pingStatus == 'testing',
     )) {
       server.pingStatus = 'idle';
       _emitPing(server);
     }
-    _emit('pingCancelled', true);
+  }
+
+  Future<void> _pingConnectedServer(WindowsServerRecord server) async {
+    if (_servers.any((item) => item.pingStatus == 'testing')) return;
+    final generation = ++_pingGeneration;
+    server
+      ..pingMs = null
+      ..pingStatus = 'testing';
+    _emitPing(server);
+    try {
+      final delay = await _measureRealDelay(_localHttpPort, trace: true);
+      if (generation != _pingGeneration) return;
+      server
+        ..pingMs = delay > 0 ? delay : null
+        ..pingStatus = delay > 0 ? 'success' : 'timeout';
+      _emitPing(server);
+    } on Object {
+      if (generation != _pingGeneration) return;
+      server
+        ..pingMs = null
+        ..pingStatus = 'timeout';
+      _emitPing(server);
+    }
   }
 
   @override
@@ -714,9 +958,15 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'customDomains',
       'customIps',
       'remoteDns',
+      'directDnsAddress',
       'vpnDns',
       'vpnInterfaceAddress',
+      'vpnInterfaceIpv6Address',
       'domainStrategy',
+      'dnsQueryStrategy',
+      'directTargetStrategy',
+      'proxyTargetStrategy',
+      'proxyDialStrategy',
       'themeMode',
       'language',
       'ipCheckUrl',
@@ -727,6 +977,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'fragmentPackets',
       'fragmentLength',
       'fragmentInterval',
+      'fragmentMaxSplit',
       'domesticDns',
       'defaultFingerprint',
       'defaultUserAgent',
@@ -734,6 +985,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     const booleanKeys = {
       'enableLocalDns',
       'enableFakeDns',
+      'directDnsEnabled',
+      'dnsParallelQuery',
+      'dnsServeStale',
+      'happyEyeballs',
       'sniffingEnabled',
       'routeOnly',
       'enableIpv6',
@@ -767,6 +1022,27 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'IPIfNonMatch',
       'IPOnDemand',
     });
+    _validateSettingChoice(updated, 'dnsQueryStrategy', const {
+      'Auto',
+      'UseIP',
+      'UseIPv4',
+      'UseIPv6',
+      'UseSystem',
+    });
+    const outboundStrategies = {
+      'AsIs',
+      'UseIP',
+      'UseIPv4',
+      'UseIPv6',
+      'UseIPv4v6',
+      'UseIPv6v4',
+    };
+    _validateSettingChoice(updated, 'directTargetStrategy', outboundStrategies);
+    _validateSettingChoice(updated, 'proxyTargetStrategy', outboundStrategies);
+    _validateSettingChoice(updated, 'proxyDialStrategy', {
+      'Auto',
+      ...outboundStrategies,
+    });
     _validateSettingChoice(updated, 'themeMode', const {
       'system',
       'light',
@@ -788,7 +1064,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'chrome',
       'firefox',
       'safari',
+      'ios',
+      'android',
       'edge',
+      '360',
+      'qq',
       'random',
       'randomized',
     });
@@ -802,9 +1082,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     final fragmentPackets = '${updated['fragmentPackets'] ?? ''}'.trim();
     final fragmentLength = '${updated['fragmentLength'] ?? ''}'.trim();
     final fragmentInterval = '${updated['fragmentInterval'] ?? ''}'.trim();
-    if (!RegExp(r'^(tlshello|\d+-\d+)$').hasMatch(fragmentPackets) ||
-        !RegExp(r'^\d+-\d+$').hasMatch(fragmentLength) ||
-        !RegExp(r'^\d+-\d+$').hasMatch(fragmentInterval)) {
+    final fragmentMaxSplit = '${updated['fragmentMaxSplit'] ?? ''}'.trim();
+    if (!(fragmentPackets == 'tlshello' ||
+            _validIntegerRange(fragmentPackets, minimum: 1)) ||
+        !_validIntegerRange(fragmentLength, minimum: 1) ||
+        !_validIntegerRange(fragmentInterval, minimum: 0) ||
+        !_validIntegerRange(fragmentMaxSplit, minimum: 0, allowSingle: true)) {
       throw _platformError(
         'invalid_settings',
         'Xray fragment values are invalid',
@@ -881,11 +1164,33 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         delayUrl.host.isEmpty) {
       throw _platformError('invalid_settings', 'Real-delay URL is invalid');
     }
+    for (final key in const [
+      'remoteDns',
+      'vpnDns',
+      'domesticDns',
+      'directDnsAddress',
+    ]) {
+      if (!_validDnsResolvers('${updated[key] ?? ''}')) {
+        throw _platformError('invalid_settings', '$key value is invalid');
+      }
+    }
+    if (!_validTunAddress(
+          '${updated['vpnInterfaceAddress'] ?? ''}',
+          type: InternetAddressType.IPv4,
+        ) ||
+        !_validTunAddress(
+          '${updated['vpnInterfaceIpv6Address'] ?? ''}',
+          type: InternetAddressType.IPv6,
+        )) {
+      throw _platformError(
+        'invalid_settings',
+        'TUN gateway address is invalid',
+      );
+    }
     final changedNetworkSetting = values.keys.any(_restartSettingKeys.contains);
     final enablingTun = values['tunEnabled'] == true && !_tunEnabled;
-    if (enablingTun && _connection['state'] == 'connected') {
-      // Fail before stopping a healthy Core. This only validates privileges
-      // and bundled files; native code never requests elevation itself.
+    if (enablingTun) {
+      // Validate before changing state or stopping a healthy Core.
       await _host.validateTunPrerequisites();
     }
     if (values.containsKey('startWithWindows') &&
@@ -985,34 +1290,85 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> _updatePublicIp(WindowsServerRecord server) async {
     final endpoint = Uri.tryParse('${_settings['ipCheckUrl']}');
     if (endpoint == null) return;
+    final timing = Stopwatch()..start();
+    _publicIpClient?.close(force: true);
     final client = HttpClient()
       ..connectionTimeout = _publicIpTimeout
       ..findProxy = (_) => 'PROXY 127.0.0.1:$_localHttpPort';
+    _publicIpClient = client;
     try {
-      final request = await client.getUrl(endpoint).timeout(_publicIpTimeout);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(_publicIpTimeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) return;
-      final payload = jsonDecode(
-        await utf8.decoder.bind(response).join().timeout(_publicIpTimeout),
-      );
-      if (payload is! Map) return;
-      final ip = '${payload['ip'] ?? payload['query'] ?? ''}'.trim();
-      if (ip.isEmpty || _connection['serverId'] != server.id) return;
-      _connection = {
-        ..._connection,
-        'publicIp': ip,
-        'publicCountry':
-            '${payload['country'] ?? payload['country_name'] ?? payload['country_code'] ?? ''}',
-        'publicCity': '${payload['city'] ?? ''}',
-        'publicIpChecked': true,
-      };
-      _emit('connectionState', _connection);
-      _log('info', 'Public IP verified through Xray');
+      for (var attempt = 0; attempt < 2; attempt++) {
+        var stage = 'request_start';
+        try {
+          _log(
+            'info',
+            'IP timing: attempt ${attempt + 1} started '
+                '${timing.elapsedMilliseconds}ms',
+          );
+          final request = await client
+              .getUrl(endpoint)
+              .timeout(_publicIpTimeout);
+          request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+          stage = 'response_headers';
+          final response = await request.close().timeout(_publicIpTimeout);
+          _log(
+            'info',
+            'IP timing: headers ${timing.elapsedMilliseconds}ms '
+                'status ${response.statusCode}',
+          );
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            await response.drain<void>();
+            throw HttpException('IP endpoint returned ${response.statusCode}');
+          }
+          stage = 'response_body';
+          final payload = jsonDecode(
+            await utf8.decoder.bind(response).join().timeout(_publicIpTimeout),
+          );
+          if (payload is! Map) throw const FormatException('Invalid IP result');
+          final ip = '${payload['ip'] ?? payload['query'] ?? ''}'.trim();
+          if (ip.isEmpty) throw const FormatException('Missing public IP');
+          if (_connection['serverId'] != server.id ||
+              _connection['state'] != 'connected') {
+            return;
+          }
+          _connection = {
+            ..._connection,
+            'publicIp': ip,
+            'publicCountry':
+                '${payload['country'] ?? payload['country_name'] ?? payload['country_code'] ?? ''}',
+            'publicCity': '${payload['city'] ?? ''}',
+            'publicIpChecked': true,
+          };
+          _emit('connectionState', _connection);
+          _log(
+            'info',
+            'Public IP verified through Xray in '
+                '${timing.elapsedMilliseconds}ms',
+          );
+          return;
+        } on Object catch (error) {
+          _log(
+            'warning',
+            'IP timing: attempt ${attempt + 1} failed at $stage '
+                '(${error.runtimeType})',
+          );
+          if (attempt == 0 &&
+              _connection['serverId'] == server.id &&
+              _connection['state'] == 'connected') {
+            await Future<void>.delayed(const Duration(milliseconds: 350));
+            continue;
+          }
+          rethrow;
+        }
+      }
     } on Object {
-      _log('warning', 'Public IP check failed');
+      if (_connection['serverId'] == server.id &&
+          _connection['state'] == 'connected') {
+        _log('warning', 'Public IP check failed');
+      }
     } finally {
       client.close(force: true);
+      if (identical(_publicIpClient, client)) _publicIpClient = null;
     }
   }
 
@@ -1070,9 +1426,16 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> _collectCoreLogs() async {
     try {
       final lines = await _host.drainXrayLogs();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_recentCoreLogs.length > 100) {
+        _recentCoreLogs.removeWhere((_, seen) => now - seen > 60000);
+      }
       for (final raw in lines) {
         final line = _sanitize(raw.trim());
         if (line.isEmpty) continue;
+        final lastSeen = _recentCoreLogs[line];
+        if (lastSeen != null && now - lastSeen < 10000) continue;
+        _recentCoreLogs[line] = now;
         final lower = line.toLowerCase();
         _log(
           lower.contains('error') || lower.contains('failed')
@@ -1113,6 +1476,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<void> _bestEffortCleanup() async {
     _monitor?.cancel();
+    _publicIpClient?.close(force: true);
+    _publicIpClient = null;
     try {
       await _host.disableSystemProxy();
     } on Object {
@@ -1193,18 +1558,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _subscriptionTimer = Timer.periodic(interval, (_) {
       unawaited(_refreshSubscriptionQuietly());
     });
-    final stale =
-        _lastUpdated == 0 ||
-        DateTime.now().millisecondsSinceEpoch - _lastUpdated >=
-            interval.inMilliseconds;
-    if (_initialized && stale) {
-      unawaited(_refreshSubscriptionQuietly());
-    }
   }
 
   Future<void> _refreshSubscriptionQuietly() async {
     try {
-      await _refreshSubscription(emit: true);
+      await refreshSubscription();
     } on Object {
       // The UI receives subscriptionError while the cached list remains usable.
     }
@@ -1212,10 +1570,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<List<String>> _loadIranCidrs() async {
     if (_settings['routingMode'] != 'bypassIran') return const [];
+    final includeIpv6 = _settings['enableIpv6'] == true;
+    final cached = _iranCidrsCache[includeIpv6];
+    if (cached != null) return cached;
     final values = <String>[];
     for (final asset in [
       'assets/routing/iran_ipv4.txt',
-      if (_settings['enableIpv6'] == true) 'assets/routing/iran_ipv6.txt',
+      if (includeIpv6) 'assets/routing/iran_ipv6.txt',
     ]) {
       final content = await rootBundle.loadString(asset);
       values.addAll(
@@ -1225,7 +1586,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             .where((line) => line.isNotEmpty && !line.startsWith('#')),
       );
     }
-    return values;
+    return _iranCidrsCache[includeIpv6] = List.unmodifiable(values);
   }
 
   void _setConnection(
@@ -1303,6 +1664,26 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
           ..._settings,
           ...settings.map((key, value) => MapEntry('$key', value)),
           if (legacyTun) 'tunEnabled': true,
+          if (!settings.containsKey('directDnsEnabled'))
+            'directDnsEnabled': false,
+          if (!settings.containsKey('directDnsAddress'))
+            'directDnsAddress': '178.22.122.100',
+          if (!settings.containsKey('fragmentMaxSplit'))
+            'fragmentMaxSplit': '0',
+          if (!settings.containsKey('vpnInterfaceIpv6Address'))
+            'vpnInterfaceIpv6Address': 'fdfe:dcba:9876::1/126',
+          if (!settings.containsKey('dnsQueryStrategy'))
+            'dnsQueryStrategy': 'Auto',
+          if (!settings.containsKey('dnsParallelQuery'))
+            'dnsParallelQuery': false,
+          if (!settings.containsKey('dnsServeStale')) 'dnsServeStale': false,
+          if (!settings.containsKey('directTargetStrategy'))
+            'directTargetStrategy': 'AsIs',
+          if (!settings.containsKey('proxyTargetStrategy'))
+            'proxyTargetStrategy': 'AsIs',
+          if (!settings.containsKey('proxyDialStrategy'))
+            'proxyDialStrategy': 'Auto',
+          if (!settings.containsKey('happyEyeballs')) 'happyEyeballs': false,
         };
       }
       _settings['connectionMode'] = 'proxy';
@@ -1339,6 +1720,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   Future<void> _persistState() => _writeJson(_stateFile, {
+    'settingsSchemaVersion': _settingsSchemaVersion,
     'selectedId': _selectedId,
     'hiddenIds': _hiddenIds.toList(growable: false),
     'profileOverrides': _profileOverrides,
@@ -1428,6 +1810,34 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   int _integerSetting(String key, int fallback) =>
       _settings[key] is num ? (_settings[key]! as num).toInt() : fallback;
+
+  Future<void> _awaitTunReady() async {
+    final probe = _tunReadinessProbe;
+    if (probe != null) return probe();
+    if (_proxyReadinessProbe != null) return;
+    final configured = '${_settings['vpnInterfaceAddress'] ?? ''}'.trim();
+    final address = configured.split('/').first;
+    final deadline = DateTime.now().add(const Duration(seconds: 4));
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final interfaces = await NetworkInterface.list(
+          includeLoopback: false,
+          type: InternetAddressType.any,
+        );
+        if (interfaces.any(
+          (item) =>
+              item.name.toLowerCase() == 'niran' ||
+              item.addresses.any((candidate) => candidate.address == address),
+        )) {
+          return;
+        }
+      } on Object {
+        // The next bounded probe may observe the adapter after route setup.
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    throw _platformError('tun_startup', 'TUN interface did not become ready');
+  }
 
   bool get _systemProxyEnabled => _settings['systemProxyEnabled'] != false;
   bool get _tunEnabled => _settings['tunEnabled'] == true;
@@ -1527,7 +1937,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   String _sanitize(String input) => input
       .replaceAll(RegExp(r'https?://\S+', caseSensitive: false), 'endpoint')
       .replaceAll(
-        RegExp(r'(vless|vmess|trojan)://\S+', caseSensitive: false),
+        RegExp(
+          r'(vless|vmess|trojan|ss|socks5?|hy2|hysteria2)://\S+',
+          caseSensitive: false,
+        ),
         'configuration',
       )
       .replaceAll(RegExp(r'[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}'), 'identifier')
@@ -1547,8 +1960,82 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     return _truncate(value, 240);
   }
 
+  String _connectionUserError(Object error) {
+    final details = _safeError(error).toLowerCase();
+    if (_tunEnabled &&
+        (details.contains('unable to set route') ||
+            details.contains('route setup'))) {
+      return 'TUN route setup failed. Run niraN as administrator and check network settings.';
+    }
+    if (_tunEnabled &&
+        (details.contains('tun') || details.contains('wintun'))) {
+      return 'TUN could not start. Check administrator permission and TUN settings.';
+    }
+    if (details.contains('xhttp extra')) {
+      return 'XHTTP Extra is invalid. Please check the profile settings.';
+    }
+    if (details.contains('dns')) {
+      return 'The DNS configuration is invalid. Please check DNS settings.';
+    }
+    if (details.contains('fragment')) {
+      return 'The Fragment configuration is invalid. Please check its values.';
+    }
+    if (details.contains('mtu')) {
+      return 'The VPN MTU is invalid. Please check TUN settings.';
+    }
+    if (error is TimeoutException ||
+        details.contains('timeout') ||
+        details.contains('timed out')) {
+      return 'Connection timed out. Check the server or your network.';
+    }
+    return 'Could not connect. Check the selected server and settings.';
+  }
+
   String _truncate(String value, int limit) =>
       value.length <= limit ? value : value.substring(0, limit);
+
+  bool _validDnsResolvers(String raw) {
+    final values = raw
+        .split(RegExp(r'[,\n]'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty);
+    if (values.isEmpty) return false;
+    return values.every((value) {
+      if (InternetAddress.tryParse(value) != null) return true;
+      final uri = Uri.tryParse(value);
+      if (uri != null && uri.scheme == 'https' && uri.host.isNotEmpty) {
+        return true;
+      }
+      return RegExp(
+        r'^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$',
+      ).hasMatch(value);
+    });
+  }
+
+  bool _validTunAddress(String raw, {required InternetAddressType type}) {
+    final parts = raw.trim().split('/');
+    if (parts.length != 2) return false;
+    final address = InternetAddress.tryParse(parts.first);
+    final prefix = int.tryParse(parts.last);
+    if (address == null || address.type != type || prefix == null) return false;
+    return type == InternetAddressType.IPv4
+        ? prefix >= 16 && prefix <= 30
+        : prefix >= 1 && prefix <= 126;
+  }
+
+  bool _validIntegerRange(
+    String value, {
+    required int minimum,
+    bool allowSingle = false,
+  }) {
+    final match = RegExp(
+      allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$',
+    ).firstMatch(value);
+    if (match == null) return false;
+    final from = int.tryParse(match.group(1) ?? '');
+    final to = int.tryParse(match.group(2) ?? match.group(1) ?? '');
+    return from != null && to != null && from >= minimum && to >= from;
+  }
 
   PlatformException _platformError(String code, String message) =>
       PlatformException(code: code, message: message);
@@ -1572,8 +2059,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'enableLocalDns': true,
     'enableFakeDns': false,
     'remoteDns': 'https://dns.google/dns-query',
+    'directDnsEnabled': false,
+    'directDnsAddress': '178.22.122.100',
     'vpnDns': '1.1.1.1',
     'vpnInterfaceAddress': '10.10.14.1/30',
+    'vpnInterfaceIpv6Address': 'fdfe:dcba:9876::1/126',
     'localSocksPort': WindowsXrayConfigBuilder.defaultSocksPort,
     'localHttpPort': WindowsXrayConfigBuilder.defaultHttpPort,
     'enableUdp': true,
@@ -1591,7 +2081,15 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'fragmentPackets': 'tlshello',
     'fragmentLength': '100-200',
     'fragmentInterval': '10-20',
+    'fragmentMaxSplit': '0',
     'domesticDns': '223.5.5.5',
+    'dnsQueryStrategy': 'Auto',
+    'dnsParallelQuery': false,
+    'dnsServeStale': false,
+    'directTargetStrategy': 'AsIs',
+    'proxyTargetStrategy': 'AsIs',
+    'proxyDialStrategy': 'Auto',
+    'happyEyeballs': false,
     'defaultFingerprint': 'chrome',
     'defaultUserAgent': '',
     'enableIpv6': true,
@@ -1631,9 +2129,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'customIps',
     'enableLocalDns',
     'enableFakeDns',
+    'directDnsEnabled',
     'remoteDns',
+    'directDnsAddress',
     'vpnDns',
     'vpnInterfaceAddress',
+    'vpnInterfaceIpv6Address',
     'localSocksPort',
     'localHttpPort',
     'vpnMtu',
@@ -1651,7 +2152,15 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'fragmentPackets',
     'fragmentLength',
     'fragmentInterval',
+    'fragmentMaxSplit',
     'domesticDns',
+    'dnsQueryStrategy',
+    'dnsParallelQuery',
+    'dnsServeStale',
+    'directTargetStrategy',
+    'proxyTargetStrategy',
+    'proxyDialStrategy',
+    'happyEyeballs',
     'defaultFingerprint',
     'defaultUserAgent',
   };

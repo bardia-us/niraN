@@ -13,6 +13,7 @@
 #include <winrt/Windows.System.Profile.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <lmcons.h>
 #include <memory>
@@ -66,6 +67,76 @@ std::wstring ExecutableDirectory() {
   path.resize(length);
   const size_t separator = path.find_last_of(L"\\/");
   return separator == std::wstring::npos ? L"" : path.substr(0, separator);
+}
+
+std::string RuntimeXrayVersion(std::wstring* error) {
+  const std::wstring executable = ExecutableDirectory() + L"\\xray\\xray.exe";
+  if (GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (error != nullptr) *error = L"Bundled xray.exe is missing";
+    return {};
+  }
+
+  SECURITY_ATTRIBUTES security{};
+  security.nLength = sizeof(security);
+  security.bInheritHandle = TRUE;
+  HANDLE read_pipe = nullptr;
+  HANDLE write_pipe = nullptr;
+  if (!CreatePipe(&read_pipe, &write_pipe, &security, 0) ||
+      !SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+    if (read_pipe != nullptr) CloseHandle(read_pipe);
+    if (write_pipe != nullptr) CloseHandle(write_pipe);
+    if (error != nullptr) *error = L"Could not create Core version pipe";
+    return {};
+  }
+
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+  startup.wShowWindow = SW_HIDE;
+  startup.hStdOutput = write_pipe;
+  startup.hStdError = write_pipe;
+  PROCESS_INFORMATION process{};
+  std::wstring command = L"\"" + executable + L"\" version";
+  const BOOL started = CreateProcessW(
+      executable.c_str(), command.data(), nullptr, nullptr, TRUE,
+      CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr,
+      ExecutableDirectory().c_str(), &startup, &process);
+  CloseHandle(write_pipe);
+  if (!started) {
+    CloseHandle(read_pipe);
+    if (error != nullptr) *error = L"Could not execute the bundled Xray Core";
+    return {};
+  }
+
+  const DWORD wait = WaitForSingleObject(process.hProcess, 3000);
+  if (wait == WAIT_TIMEOUT) TerminateProcess(process.hProcess, 1);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+
+  std::string output;
+  std::array<char, 512> buffer{};
+  DWORD bytes_read = 0;
+  while (ReadFile(read_pipe, buffer.data(), static_cast<DWORD>(buffer.size()),
+                  &bytes_read, nullptr) &&
+         bytes_read != 0) {
+    output.append(buffer.data(), bytes_read);
+  }
+  CloseHandle(read_pipe);
+  if (wait != WAIT_OBJECT_0) {
+    if (error != nullptr) *error = L"Xray Core version check timed out";
+    return {};
+  }
+
+  const size_t marker = output.find("Xray ");
+  if (marker == std::string::npos) {
+    if (error != nullptr) *error = L"Xray Core returned an unknown version";
+    return {};
+  }
+  const size_t begin = marker + 5;
+  const size_t end = output.find_first_of(" \t\r\n", begin);
+  std::string version = output.substr(begin, end - begin);
+  if (!version.empty() && version.front() != 'v') version.insert(0, "v");
+  return version;
 }
 
 const flutter::EncodableValue* Argument(
@@ -335,6 +406,8 @@ void WindowsBackendBridge::HandleMethodCall(
         flutter::EncodableValue(Utf8(private_config::kTelegramContact));
     values[flutter::EncodableValue("appVersion")] =
         flutter::EncodableValue(FLUTTER_VERSION);
+    values[flutter::EncodableValue("expectedCoreVersion")] =
+        flutter::EncodableValue(Utf8(private_config::kXrayVersion));
     result->Success(flutter::EncodableValue(values));
     return;
   }
@@ -457,8 +530,13 @@ void WindowsBackendBridge::HandleMethodCall(
     return;
   }
   if (method == "getXrayVersion") {
-    result->Success(
-        flutter::EncodableValue(Utf8(private_config::kXrayVersion)));
+    std::wstring error;
+    const std::string version = RuntimeXrayVersion(&error);
+    if (version.empty()) {
+      result->Error("core_version", Utf8(error));
+      return;
+    }
+    result->Success(flutter::EncodableValue(version));
     return;
   }
   if (method == "enableSystemProxy") {

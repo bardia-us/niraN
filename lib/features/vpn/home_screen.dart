@@ -279,8 +279,20 @@ class _ConnectionAction extends StatelessWidget {
       );
     }
     return FilledButton.tonalIcon(
-      onPressed: connection.canConnect && enabled
-          ? () => _connect(context)
+      onPressed: connection.canConnect
+          ? () {
+              if (!enabled) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    behavior: SnackBarBehavior.floating,
+                    duration: Duration(seconds: 3),
+                    content: Text('Please select a server first.'),
+                  ),
+                );
+                return;
+              }
+              _connect(context);
+            }
           : null,
       icon: const Icon(Icons.refresh_rounded, size: 19),
       label: Text(context.s('retryCore')),
@@ -431,6 +443,7 @@ class _DesktopConnectionControls extends StatelessWidget {
     runSpacing: 8,
     children: [
       InteractiveDepth(
+        reducedEffects: settings.performanceMode,
         child: _ProxyActionButton(
           selected: settings.systemProxyState == 'niran',
           onPressed: connection.isConnected
@@ -445,6 +458,7 @@ class _DesktopConnectionControls extends StatelessWidget {
         ),
       ),
       InteractiveDepth(
+        reducedEffects: settings.performanceMode,
         child: _ProxyActionButton(
           selected: settings.systemProxyState == 'clear',
           onPressed: () => _runProxyAction(
@@ -459,6 +473,7 @@ class _DesktopConnectionControls extends StatelessWidget {
       _TunSwitch(
         value: settings.isTunEnabled,
         enabled: !connection.isBusy,
+        reducedEffects: settings.performanceMode,
         onChanged: (value) => _perform(
           context,
           () => controller.updateSettings({'tunEnabled': value}),
@@ -508,11 +523,13 @@ class _TunSwitch extends StatelessWidget {
   const _TunSwitch({
     required this.value,
     required this.enabled,
+    required this.reducedEffects,
     required this.onChanged,
   });
 
   final bool value;
   final bool enabled;
+  final bool reducedEffects;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -520,6 +537,7 @@ class _TunSwitch extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return InteractiveDepth(
       enabled: enabled,
+      reducedEffects: reducedEffects,
       child: Semantics(
         button: true,
         toggled: value,

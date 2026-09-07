@@ -130,7 +130,7 @@ Future<_BatchAudit> _auditTestAll(
   process.stdout.drain<void>();
   process.stderr.drain<void>();
   try {
-    final ready = await Future.wait(socksPorts.map(_waitForPort));
+    final ready = await Future.wait(httpPorts.map(_waitForPort));
     if (ready.any((value) => !value)) {
       return _BatchAudit.failed(process.pid);
     }
@@ -138,10 +138,10 @@ Future<_BatchAudit> _auditTestAll(
     await Future<void>.delayed(const Duration(seconds: 2));
     final idleEnd = await _cpuMilliseconds(process.pid);
     final delays = await Future.wait([
-      for (final port in socksPorts)
+      for (final port in httpPorts)
         measureWindowsRealDelay(
           target: Uri.parse('https://www.gstatic.com/generate_204'),
-          socksPort: port,
+          proxyPort: port,
           timeout: const Duration(seconds: 8),
         ),
     ]);
@@ -231,8 +231,11 @@ Future<_ProbeResult> _probe(
     final probeStart = idleEnd;
     final delay = await measureWindowsRealDelay(
       target: Uri.parse('https://www.gstatic.com/generate_204'),
-      socksPort: socksPort,
+      proxyPort: httpPort,
       timeout: const Duration(seconds: 8),
+      trace: (phase, elapsedMs, detail) {
+        stdout.writeln('Latency trace: $phase ${elapsedMs}ms $detail');
+      },
     );
     final httpIp = await _publicIp(['--proxy', 'http://127.0.0.1:$httpPort']);
     final socksIp = await _publicIp([

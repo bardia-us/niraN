@@ -83,7 +83,9 @@ final class WindowsXrayConfigBuilder {
         {
           'tag': 'direct',
           'protocol': 'freedom',
-          'settings': <String, Object?>{},
+          'settings': <String, Object?>{
+            'targetStrategy': '${settings['directTargetStrategy'] ?? 'AsIs'}',
+          },
         },
         {
           'tag': 'blocked',
@@ -100,6 +102,7 @@ final class WindowsXrayConfigBuilder {
                 'packets': '${settings['fragmentPackets'] ?? 'tlshello'}',
                 'length': '${settings['fragmentLength'] ?? '100-200'}',
                 'interval': '${settings['fragmentInterval'] ?? '10-20'}',
+                'maxSplit': '${settings['fragmentMaxSplit'] ?? '0'}',
               },
             },
           },
@@ -209,7 +212,8 @@ final class WindowsXrayConfigBuilder {
           'mtu': _integer(settings, 'vpnMtu', 1500),
           'gateway': [
             '${settings['vpnInterfaceAddress'] ?? '10.10.14.1/30'}',
-            if (ipv6) 'fdfe:dcba:9876::1/126',
+            if (ipv6)
+              '${settings['vpnInterfaceIpv6Address'] ?? 'fdfe:dcba:9876::1/126'}',
           ],
           'dns': _tunDns(settings),
           'autoSystemRoutingTable': ['0.0.0.0/0', if (ipv6) '::/0'],
@@ -253,6 +257,7 @@ final class WindowsXrayConfigBuilder {
     Map<String, Object?> settings,
   ) => {
     'tag': 'proxy',
+    'targetStrategy': '${settings['proxyTargetStrategy'] ?? 'AsIs'}',
     'protocol': server.protocol.toLowerCase() == 'hysteria2'
         ? 'hysteria'
         : server.protocol.toLowerCase(),
@@ -364,12 +369,17 @@ final class WindowsXrayConfigBuilder {
           'multiMode': server.parameters['mode']?.toLowerCase() == 'multi',
         };
       case 'xhttp':
+        final extra = _jsonObjectParameter(
+          server.parameters['extra'],
+          label: 'XHTTP extra',
+        );
         result['xhttpSettings'] = {
           'path': server.parameters['path'] ?? '/',
           if ((server.parameters['host'] ?? '').isNotEmpty)
             'host': server.parameters['host'],
           if ((server.parameters['mode'] ?? '').isNotEmpty)
             'mode': server.parameters['mode'],
+          'extra': ?extra,
         };
       case 'tcp':
         final headerType = server.parameters['headerType'];
@@ -396,12 +406,18 @@ final class WindowsXrayConfigBuilder {
         };
       case 'reality':
         final fingerprint = _fingerprint(server, settings, tls: false);
+        final mldsa65Verify =
+            (server.parameters['mldsa65Verify'] ??
+                    server.parameters['pqv'] ??
+                    '')
+                .trim();
         result['realitySettings'] = {
           'serverName': server.parameters['sni'] ?? server.address,
           'fingerprint': fingerprint,
           'publicKey': server.parameters['pbk'] ?? '',
           'shortId': server.parameters['sid'] ?? '',
           'spiderX': server.parameters['spx'] ?? '/',
+          if (mldsa65Verify.isNotEmpty) 'mldsa65Verify': mldsa65Verify,
         };
     }
     final finalMask = (server.parameters['fm'] ?? '').trim();
@@ -427,9 +443,27 @@ final class WindowsXrayConfigBuilder {
       };
     }
     final sockopt = <String, Object?>{};
-    if (_bool(settings, 'enableIpv6', true) &&
-        _bool(settings, 'preferIpv6', false)) {
-      sockopt['domainStrategy'] = 'UseIPv6v4';
+    var dialStrategy = '${settings['proxyDialStrategy'] ?? 'Auto'}';
+    if (dialStrategy == 'Auto') {
+      dialStrategy =
+          _bool(settings, 'enableIpv6', true) &&
+              _bool(settings, 'preferIpv6', false)
+          ? 'UseIPv6v4'
+          : 'AsIs';
+    }
+    if (_bool(settings, 'happyEyeballs', false) && dialStrategy == 'AsIs') {
+      dialStrategy = 'UseIP';
+    }
+    if (dialStrategy != 'AsIs') {
+      sockopt['domainStrategy'] = dialStrategy;
+    }
+    if (_bool(settings, 'happyEyeballs', false)) {
+      sockopt['happyEyeballs'] = {
+        'tryDelayMs': 250,
+        'prioritizeIPv6': _bool(settings, 'preferIpv6', false),
+        'interleave': 1,
+        'maxConcurrentTry': 4,
+      };
     }
     if (_bool(settings, 'fragmentEnabled', false) && finalMask.isEmpty) {
       sockopt['dialerProxy'] = 'fragment';
@@ -459,7 +493,38 @@ final class WindowsXrayConfigBuilder {
         'Fingerprint unsafe is supported only by Xray TLS transports',
       );
     }
+    const supported = {
+      'chrome',
+      'firefox',
+      'safari',
+      'ios',
+      'android',
+      'edge',
+      '360',
+      'qq',
+      'random',
+      'randomized',
+      'unsafe',
+    };
+    if (!supported.contains(fingerprint)) {
+      throw const FormatException('Unsupported TLS fingerprint');
+    }
     return fingerprint;
+  }
+
+  Map<String, Object?>? _jsonObjectParameter(
+    String? raw, {
+    required String label,
+  }) {
+    final value = raw?.trim() ?? '';
+    if (value.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) throw const FormatException();
+      return decoded.map((key, item) => MapEntry('$key', item));
+    } on Object {
+      throw FormatException('$label must be a JSON object');
+    }
   }
 
   Map<String, Object?> _dns(Map<String, Object?> settings) {
@@ -468,6 +533,14 @@ final class WindowsXrayConfigBuilder {
     ];
     if (servers.isEmpty) servers.add('localhost');
     final domestic = _rules('${settings['domesticDns'] ?? ''}');
+    final directDns = '${settings['directDnsAddress'] ?? ''}'.trim();
+    if (_bool(settings, 'directDnsEnabled', false) && directDns.isNotEmpty) {
+      servers.insert(0, {
+        'address': directDns,
+        'domains': ['domain:ir', 'domain:local'],
+        'skipFallback': true,
+      });
+    }
     if (settings['routingMode'] == 'bypassIran' && domestic.isNotEmpty) {
       servers.insert(0, {
         'address': domestic.first,
@@ -478,11 +551,15 @@ final class WindowsXrayConfigBuilder {
         _bool(settings, 'enableFakeDns', false)) {
       servers.insert(0, 'fakedns');
     }
+    final configuredStrategy = '${settings['dnsQueryStrategy'] ?? 'Auto'}';
+    final queryStrategy = configuredStrategy == 'Auto'
+        ? (_bool(settings, 'enableIpv6', true) ? 'UseIP' : 'UseIPv4')
+        : configuredStrategy;
     return {
       'servers': servers,
-      'queryStrategy': _bool(settings, 'enableIpv6', true)
-          ? 'UseIP'
-          : 'UseIPv4',
+      'queryStrategy': queryStrategy,
+      'enableParallelQuery': _bool(settings, 'dnsParallelQuery', false),
+      'serveStale': _bool(settings, 'dnsServeStale', false),
     };
   }
 
@@ -550,21 +627,21 @@ final class WindowsXrayConfigBuilder {
         },
       ]);
     } else if (mode == 'custom') {
-      rules.add({
-        'type': 'field',
-        'ip': privateIps,
-        'domain': privateDomains,
-        'outboundTag': 'direct',
-      });
+      rules.addAll([
+        {'type': 'field', 'domain': privateDomains, 'outboundTag': 'direct'},
+        {'type': 'field', 'ip': privateIps, 'outboundTag': 'direct'},
+      ]);
       final ips = _rules('${settings['customIps'] ?? ''}');
       final domains = _domainRules('${settings['customDomains'] ?? ''}');
-      if (ips.isNotEmpty || domains.isNotEmpty) {
+      if (domains.isNotEmpty) {
         rules.add({
           'type': 'field',
-          if (ips.isNotEmpty) 'ip': ips,
-          if (domains.isNotEmpty) 'domain': domains,
+          'domain': domains,
           'outboundTag': 'direct',
         });
+      }
+      if (ips.isNotEmpty) {
+        rules.add({'type': 'field', 'ip': ips, 'outboundTag': 'direct'});
       }
     }
     if (blockQuic) {

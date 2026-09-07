@@ -186,8 +186,11 @@ class NativeSettings {
     this.enableLocalDns = true,
     this.enableFakeDns = false,
     this.remoteDns = 'https://dns.google/dns-query',
+    this.directDnsEnabled = false,
+    this.directDnsAddress = '178.22.122.100',
     this.vpnDns = '1.1.1.1',
     this.vpnInterfaceAddress = '10.10.14.1/30',
+    this.vpnInterfaceIpv6Address = 'fdfe:dcba:9876::1/126',
     this.localSocksPort = 10808,
     this.localHttpPort = 10809,
     this.enableUdp = true,
@@ -205,7 +208,15 @@ class NativeSettings {
     this.fragmentPackets = 'tlshello',
     this.fragmentLength = '100-200',
     this.fragmentInterval = '10-20',
+    this.fragmentMaxSplit = '0',
     this.domesticDns = '223.5.5.5',
+    this.dnsQueryStrategy = 'Auto',
+    this.dnsParallelQuery = false,
+    this.dnsServeStale = false,
+    this.directTargetStrategy = 'AsIs',
+    this.proxyTargetStrategy = 'AsIs',
+    this.proxyDialStrategy = 'Auto',
+    this.happyEyeballs = false,
     this.defaultFingerprint = 'chrome',
     this.defaultUserAgent = '',
     this.enableIpv6 = true,
@@ -238,8 +249,12 @@ class NativeSettings {
     enableLocalDns: map['enableLocalDns'] != false,
     enableFakeDns: map['enableFakeDns'] == true,
     remoteDns: '${map['remoteDns'] ?? 'https://dns.google/dns-query'}',
+    directDnsEnabled: map['directDnsEnabled'] == true,
+    directDnsAddress: '${map['directDnsAddress'] ?? '178.22.122.100'}',
     vpnDns: '${map['vpnDns'] ?? '1.1.1.1'}',
     vpnInterfaceAddress: '${map['vpnInterfaceAddress'] ?? '10.10.14.1/30'}',
+    vpnInterfaceIpv6Address:
+        '${map['vpnInterfaceIpv6Address'] ?? 'fdfe:dcba:9876::1/126'}',
     localSocksPort: _int(map['localSocksPort']) ?? 10808,
     localHttpPort: _int(map['localHttpPort']) ?? 10809,
     enableUdp: map['enableUdp'] != false,
@@ -258,7 +273,15 @@ class NativeSettings {
     fragmentPackets: '${map['fragmentPackets'] ?? 'tlshello'}',
     fragmentLength: '${map['fragmentLength'] ?? '100-200'}',
     fragmentInterval: '${map['fragmentInterval'] ?? '10-20'}',
+    fragmentMaxSplit: '${map['fragmentMaxSplit'] ?? '0'}',
     domesticDns: '${map['domesticDns'] ?? '223.5.5.5'}',
+    dnsQueryStrategy: '${map['dnsQueryStrategy'] ?? 'Auto'}',
+    dnsParallelQuery: map['dnsParallelQuery'] == true,
+    dnsServeStale: map['dnsServeStale'] == true,
+    directTargetStrategy: '${map['directTargetStrategy'] ?? 'AsIs'}',
+    proxyTargetStrategy: '${map['proxyTargetStrategy'] ?? 'AsIs'}',
+    proxyDialStrategy: '${map['proxyDialStrategy'] ?? 'Auto'}',
+    happyEyeballs: map['happyEyeballs'] == true,
     defaultFingerprint: '${map['defaultFingerprint'] ?? 'chrome'}',
     defaultUserAgent: '${map['defaultUserAgent'] ?? ''}',
     enableIpv6: map['enableIpv6'] != false,
@@ -287,8 +310,11 @@ class NativeSettings {
   final bool enableLocalDns;
   final bool enableFakeDns;
   final String remoteDns;
+  final bool directDnsEnabled;
+  final String directDnsAddress;
   final String vpnDns;
   final String vpnInterfaceAddress;
+  final String vpnInterfaceIpv6Address;
   final int localSocksPort;
   final int localHttpPort;
   final bool enableUdp;
@@ -306,7 +332,15 @@ class NativeSettings {
   final String fragmentPackets;
   final String fragmentLength;
   final String fragmentInterval;
+  final String fragmentMaxSplit;
   final String domesticDns;
+  final String dnsQueryStrategy;
+  final bool dnsParallelQuery;
+  final bool dnsServeStale;
+  final String directTargetStrategy;
+  final String proxyTargetStrategy;
+  final String proxyDialStrategy;
+  final bool happyEyeballs;
   final String defaultFingerprint;
   final String defaultUserAgent;
   final bool enableIpv6;
@@ -345,10 +379,16 @@ class NativeSettings {
       enableLocalDns: boolValue('enableLocalDns', enableLocalDns),
       enableFakeDns: boolValue('enableFakeDns', enableFakeDns),
       remoteDns: stringValue('remoteDns', remoteDns),
+      directDnsEnabled: boolValue('directDnsEnabled', directDnsEnabled),
+      directDnsAddress: stringValue('directDnsAddress', directDnsAddress),
       vpnDns: stringValue('vpnDns', vpnDns),
       vpnInterfaceAddress: stringValue(
         'vpnInterfaceAddress',
         vpnInterfaceAddress,
+      ),
+      vpnInterfaceIpv6Address: stringValue(
+        'vpnInterfaceIpv6Address',
+        vpnInterfaceIpv6Address,
       ),
       localSocksPort: intValue('localSocksPort', localSocksPort),
       localHttpPort: intValue('localHttpPort', localHttpPort),
@@ -373,7 +413,21 @@ class NativeSettings {
       fragmentPackets: stringValue('fragmentPackets', fragmentPackets),
       fragmentLength: stringValue('fragmentLength', fragmentLength),
       fragmentInterval: stringValue('fragmentInterval', fragmentInterval),
+      fragmentMaxSplit: stringValue('fragmentMaxSplit', fragmentMaxSplit),
       domesticDns: stringValue('domesticDns', domesticDns),
+      dnsQueryStrategy: stringValue('dnsQueryStrategy', dnsQueryStrategy),
+      dnsParallelQuery: boolValue('dnsParallelQuery', dnsParallelQuery),
+      dnsServeStale: boolValue('dnsServeStale', dnsServeStale),
+      directTargetStrategy: stringValue(
+        'directTargetStrategy',
+        directTargetStrategy,
+      ),
+      proxyTargetStrategy: stringValue(
+        'proxyTargetStrategy',
+        proxyTargetStrategy,
+      ),
+      proxyDialStrategy: stringValue('proxyDialStrategy', proxyDialStrategy),
+      happyEyeballs: boolValue('happyEyeballs', happyEyeballs),
       defaultFingerprint: stringValue('defaultFingerprint', defaultFingerprint),
       defaultUserAgent: stringValue('defaultUserAgent', defaultUserAgent),
       enableIpv6: boolValue('enableIpv6', enableIpv6),

@@ -24,11 +24,11 @@ class GlassSurface extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final reducedEffects = ref.watch(performanceModeProvider);
-    final lightTop = scheme.surface.withValues(alpha: .88);
+    final lightTop = scheme.surface.withValues(alpha: .84);
     final lightBottom = Color.alphaBlend(
       scheme.primaryContainer.withValues(alpha: .065),
       scheme.surface,
-    ).withValues(alpha: .84);
+    ).withValues(alpha: .80);
     final content = DecoratedBox(
       decoration: BoxDecoration(
         gradient: reducedEffects
@@ -37,16 +37,16 @@ class GlassSurface extends ConsumerWidget {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  dark ? scheme.surface.withValues(alpha: .74) : lightTop,
+                  dark ? scheme.surface.withValues(alpha: .68) : lightTop,
                   dark
-                      ? scheme.primaryContainer.withValues(alpha: .12)
+                      ? scheme.primaryContainer.withValues(alpha: .15)
                       : lightBottom,
                 ],
               ),
         color: reducedEffects
             ? scheme.surfaceContainerLow.withValues(alpha: dark ? .94 : .97)
             : null,
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: .52)),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: .48)),
         borderRadius: BorderRadius.circular(radius),
         boxShadow: reducedEffects
             ? const []

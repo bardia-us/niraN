@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <iterator>
 #include <string>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -15,6 +16,31 @@ constexpr UINT kTraySetProxy = 41003;
 constexpr UINT kTrayClearProxy = 41004;
 constexpr UINT kTrayTun = 41005;
 constexpr UINT kTrayExit = 41006;
+constexpr wchar_t kWindowStateKey[] = L"Software\\niraN\\Window";
+
+void SaveWindowBounds(HWND window) {
+  WINDOWPLACEMENT placement = {sizeof(placement)};
+  if (!GetWindowPlacement(window, &placement)) return;
+  const RECT& bounds = placement.rcNormalPosition;
+  const DWORD state = placement.showCmd == SW_SHOWMAXIMIZED ? 1 : 0;
+  const DWORD values[] = {
+      static_cast<DWORD>(bounds.left), static_cast<DWORD>(bounds.top),
+      static_cast<DWORD>(bounds.right - bounds.left),
+      static_cast<DWORD>(bounds.bottom - bounds.top), state};
+  constexpr const wchar_t* names[] = {L"X", L"Y", L"Width", L"Height",
+                                      L"State"};
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kWindowStateKey, 0, nullptr, 0,
+                      KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+  for (size_t index = 0; index < std::size(values); ++index) {
+    RegSetValueExW(key, names[index], 0, REG_DWORD,
+                   reinterpret_cast<const BYTE*>(&values[index]),
+                   sizeof(values[index]));
+  }
+  RegCloseKey(key);
+}
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -77,6 +103,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return windows_backend_->HandleAsyncCompletion(lparam) ? 0 : 1;
   }
   if (message == niran::WindowsBackendBridge::kExitApplicationMessage) {
+    SaveWindowBounds(hwnd);
     exit_requested_ = true;
     if (windows_backend_) windows_backend_->Shutdown();
     DestroyWindow(hwnd);
@@ -92,6 +119,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return 0;
   }
   if (message == WM_CLOSE && !exit_requested_) {
+    SaveWindowBounds(hwnd);
     ShowWindow(hwnd, SW_HIDE);
     return 0;
   }
