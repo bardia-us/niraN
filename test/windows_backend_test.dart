@@ -820,8 +820,8 @@ void main() {
         'ready:10809',
         'enable:10809',
         'disable',
-        'stop',
         'stopSpeedtest',
+        'stop',
       ]);
       expect(
         (await backend.initialize())['connection'],
@@ -984,6 +984,7 @@ void main() {
       final backend = WindowsPlatformBackend(
         remoteAccess: _AllowedRemoteAccess(),
         autoStartCore: false,
+        useSingBoxTunFrontend: false,
         localPortPreflight: (_) async {},
         host: host,
         dataDirectory: directory,
@@ -1011,9 +1012,174 @@ void main() {
         'start:tun',
         'ready:10809',
         'disable',
-        'stop',
         'stopSpeedtest',
+        'stop',
       ]);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('sing-box TUN pipeline starts and stops in dependency order', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-singbox-tun-lifecycle-test-',
+    );
+    final host = _FakeWindowsHost();
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        useSingBoxTunFrontend: true,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+        proxyReadinessProbe: (port) async => host.calls.add('ready:$port'),
+        tunReadinessProbe: () async {},
+      );
+      await backend.initialize();
+      await backend.updateSettings({
+        'tunEnabled': true,
+        'systemProxyEnabled': false,
+      });
+      host.calls.clear();
+
+      await backend.connect('server');
+      expect(host.calls, [
+        'validateTunFrontend',
+        'stopSpeedtest',
+        'start',
+        'ready:10808',
+        'ready:10809',
+        'startTunFrontend',
+      ]);
+      final xrayConfig = jsonDecode(host.lastXrayConfig!) as Map;
+      expect(
+        (xrayConfig['inbounds'] as List).whereType<Map>().any(
+          (inbound) => inbound['protocol'] == 'tun',
+        ),
+        isFalse,
+      );
+      expect(
+        ((xrayConfig['routing'] as Map)['rules'] as List).whereType<Map>().any(
+          (rule) => rule['outboundTag'] == 'dns-out',
+        ),
+        isFalse,
+      );
+
+      await backend.restartService();
+      expect(
+        host.calls,
+        containsAllInOrder([
+          'stopTunFrontend',
+          'stop',
+          'validateTunFrontend',
+          'start',
+          'startTunFrontend',
+        ]),
+      );
+
+      host.calls.clear();
+      await backend.disconnect();
+      expect(host.calls, [
+        'disable',
+        'stopSpeedtest',
+        'stopTunFrontend',
+        'stop',
+      ]);
+      expect(host.running, isFalse);
+      expect(host.tunFrontendRunning, isFalse);
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('sing-box TUN startup failure rolls Xray back completely', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-singbox-tun-rollback-test-',
+    );
+    final host = _FakeWindowsHost()
+      ..tunStartFailure = PlatformException(
+        code: 'tun_startup',
+        message: 'sing-box failed',
+      );
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        useSingBoxTunFrontend: true,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+        proxyReadinessProbe: (_) async {},
+        tunReadinessProbe: () async {},
+      );
+      await backend.initialize();
+      await backend.updateSettings({
+        'tunEnabled': true,
+        'systemProxyEnabled': false,
+      });
+      host.calls.clear();
+
+      await expectLater(backend.connect('server'), throwsA(isA<Object>()));
+
+      expect(
+        host.calls,
+        containsAllInOrder([
+          'start',
+          'startTunFrontend',
+          'disable',
+          'stopTunFrontend',
+          'stop',
+        ]),
+      );
+      expect(host.running, isFalse);
+      expect(host.tunFrontendRunning, isFalse);
+      expect(
+        (await backend.initialize())['connection'],
+        containsPair('state', 'error'),
+      );
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('sing-box TUN monitor stops Xray when the frontend exits', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'niraN-singbox-tun-monitor-test-',
+    );
+    final host = _FakeWindowsHost();
+    try {
+      await _seedConnectableServer(directory);
+      final backend = WindowsPlatformBackend(
+        remoteAccess: _AllowedRemoteAccess(),
+        autoStartCore: false,
+        useSingBoxTunFrontend: true,
+        localPortPreflight: (_) async {},
+        host: host,
+        dataDirectory: directory,
+        proxyReadinessProbe: (_) async {},
+        tunReadinessProbe: () async {},
+      );
+      await backend.initialize();
+      await backend.updateSettings({
+        'tunEnabled': true,
+        'systemProxyEnabled': false,
+      });
+      await backend.connect('server');
+      host
+        ..calls.clear()
+        ..tunFrontendRunning = false;
+
+      await Future<void>.delayed(const Duration(milliseconds: 1150));
+
+      final connection =
+          (await backend.initialize())['connection'] as Map<dynamic, dynamic>;
+      expect(connection['state'], 'error');
+      expect('${connection['error']}', contains('sing-box TUN exited'));
+      expect(host.calls, containsAllInOrder(['stopTunFrontend', 'stop']));
+      expect(host.running, isFalse);
     } finally {
       await directory.delete(recursive: true);
     }
@@ -1181,7 +1347,12 @@ void main() {
         ),
       );
 
-      expect(host.calls, ['validateTun', 'disable', 'stop']);
+      expect(host.calls, [
+        'validateTunFrontend',
+        'disable',
+        'stopSpeedtest',
+        'stop',
+      ]);
       expect(host.running, isFalse);
       expect(
         (await backend.initialize())['connection'],
@@ -1220,6 +1391,7 @@ void main() {
         'ready:10809',
         'enable:10809',
         'disable',
+        'stopSpeedtest',
         'stop',
       ]);
       expect(
@@ -1259,7 +1431,7 @@ void main() {
       final connection =
           (await backend.initialize())['connection'] as Map<dynamic, dynamic>;
       expect(connection['state'], 'error');
-      expect('${connection['error']}', contains('proxy restore failed'));
+      expect('${connection['error']}', contains('cleanup failed'));
 
       host.disableFailure = null;
       await backend.disconnect();
@@ -1430,9 +1602,11 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   Object? enableFailure;
   Object? disableFailure;
   Object? tunValidationFailure;
+  Object? tunStartFailure;
   String proxyState = 'niran';
   String coreVersion = 'v26.7.28';
   bool tunFrontendRunning = false;
+  String? lastXrayConfig;
 
   @override
   Future<Map<dynamic, dynamic>> getBuildConfig() async => {
@@ -1452,6 +1626,12 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   @override
   Future<void> validateTunPrerequisites() async {
     calls.add('validateTun');
+    if (tunValidationFailure case final failure?) throw failure;
+  }
+
+  @override
+  Future<void> validateTunFrontendPrerequisites() async {
+    calls.add('validateTunFrontend');
     if (tunValidationFailure case final failure?) throw failure;
   }
 
@@ -1506,6 +1686,7 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   @override
   Future<void> startXray(String configPath, {required bool tunMode}) async {
     calls.add(tunMode ? 'start:tun' : 'start');
+    lastXrayConfig = await File(configPath).readAsString();
     running = true;
   }
 
@@ -1518,6 +1699,7 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   @override
   Future<void> startTunFrontend(String configPath) async {
     calls.add('startTunFrontend');
+    if (tunStartFailure case final failure?) throw failure;
     tunFrontendRunning = true;
   }
 

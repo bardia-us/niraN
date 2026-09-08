@@ -160,42 +160,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onSave: (value) => controller.updateSettings({'vpnDns': value}),
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.settings_ethernet_rounded),
-              title: Text(context.s('vpnInterfaceAddress')),
-              subtitle: Text(settings.vpnInterfaceAddress),
-              onTap: () => _editSingleValue(
-                context,
-                title: context.s('vpnInterfaceAddress'),
-                initial: settings.vpnInterfaceAddress,
-                validator: (value) => _validateVpnAddress(context, value),
-                onSave: (value) =>
-                    controller.updateSettings({'vpnInterfaceAddress': value}),
-              ),
-            ),
-            if (settings.enableIpv6)
-              ListTile(
-                leading: const Icon(Icons.device_hub_rounded),
-                title: Text(context.s('vpnInterfaceIpv6Address')),
-                subtitle: Text(settings.vpnInterfaceIpv6Address),
-                onTap: () => _editSingleValue(
-                  context,
-                  title: context.s('vpnInterfaceIpv6Address'),
-                  initial: settings.vpnInterfaceIpv6Address,
-                  validator: (value) => _validateVpnIpv6Address(context, value),
-                  onSave: (value) => controller.updateSettings({
-                    'vpnInterfaceIpv6Address': value,
-                  }),
-                ),
-              ),
-            ListTile(
-              leading: const Icon(Icons.straighten_rounded),
-              title: Text(context.s('vpnMtu')),
-              subtitle: Text(
-                '${settings.vpnMtu} · ${context.s('vpnMtuSummary')}',
-              ),
-              onTap: () => _editMtu(context, controller, settings.vpnMtu),
-            ),
           ],
         ),
         _SettingsGroup(
@@ -441,96 +405,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     controller.updateSettings({'defaultUserAgent': value}),
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.filter_alt_outlined),
-              title: Text(context.s('dnsQueryStrategy')),
-              subtitle: Text(settings.dnsQueryStrategy),
-              onTap: () => _chooseValue(
-                context,
-                title: context.s('dnsQueryStrategy'),
-                current: settings.dnsQueryStrategy,
-                values: const {
-                  'Auto': 'Auto',
-                  'UseIP': 'IPv4 + IPv6',
-                  'UseIPv4': 'IPv4 only',
-                  'UseIPv6': 'IPv6 only',
-                  'UseSystem': 'System DNS strategy',
-                },
-                onSelected: (value) =>
-                    controller.updateSettings({'dnsQueryStrategy': value}),
-              ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.call_split_rounded),
-              title: Text(context.s('dnsParallelQuery')),
-              subtitle: Text(context.s('dnsParallelQuerySummary')),
-              value: settings.dnsParallelQuery,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({'dnsParallelQuery': value}),
-              ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.cached_rounded),
-              title: Text(context.s('dnsServeStale')),
-              subtitle: Text(context.s('dnsServeStaleSummary')),
-              value: settings.dnsServeStale,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({'dnsServeStale': value}),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.alt_route_rounded),
-              title: Text(context.s('directTargetStrategy')),
-              subtitle: Text(settings.directTargetStrategy),
-              onTap: () => _chooseValue(
-                context,
-                title: context.s('directTargetStrategy'),
-                current: settings.directTargetStrategy,
-                values: _xrayResolutionStrategies,
-                onSelected: (value) =>
-                    controller.updateSettings({'directTargetStrategy': value}),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.cloud_queue_rounded),
-              title: Text(context.s('proxyTargetStrategy')),
-              subtitle: Text(settings.proxyTargetStrategy),
-              onTap: () => _chooseValue(
-                context,
-                title: context.s('proxyTargetStrategy'),
-                current: settings.proxyTargetStrategy,
-                values: _xrayResolutionStrategies,
-                onSelected: (value) =>
-                    controller.updateSettings({'proxyTargetStrategy': value}),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.cable_rounded),
-              title: Text(context.s('proxyDialStrategy')),
-              subtitle: Text(settings.proxyDialStrategy),
-              onTap: () => _chooseValue(
-                context,
-                title: context.s('proxyDialStrategy'),
-                current: settings.proxyDialStrategy,
-                values: const {'Auto': 'Auto', ..._xrayResolutionStrategies},
-                onSelected: (value) =>
-                    controller.updateSettings({'proxyDialStrategy': value}),
-              ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.swap_horiz_rounded),
-              title: Text(context.s('happyEyeballs')),
-              subtitle: Text(context.s('happyEyeballsSummary')),
-              value: settings.happyEyeballs,
-              onChanged: settings.enableIpv6
-                  ? (value) => _perform(
-                      context,
-                      () => controller.updateSettings({'happyEyeballs': value}),
-                    )
-                  : null,
-            ),
           ],
         ),
         _SettingsGroup(
@@ -621,6 +495,137 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onSelected: (value) =>
                     controller.updateSettings({'domainStrategy': value}),
               ),
+            ),
+          ],
+        ),
+        _SettingsGroup(
+          title: context.s('advancedSettings'),
+          children: [
+            ListTile(
+              leading: const Icon(Icons.settings_ethernet_rounded),
+              title: Text(context.s('vpnInterfaceAddress')),
+              subtitle: Text(settings.vpnInterfaceAddress),
+              onTap: () => _editSingleValue(
+                context,
+                title: context.s('vpnInterfaceAddress'),
+                initial: settings.vpnInterfaceAddress,
+                validator: (value) => _validateVpnAddress(context, value),
+                onSave: (value) =>
+                    controller.updateSettings({'vpnInterfaceAddress': value}),
+              ),
+            ),
+            if (settings.enableIpv6)
+              ListTile(
+                leading: const Icon(Icons.device_hub_rounded),
+                title: Text(context.s('vpnInterfaceIpv6Address')),
+                subtitle: Text(settings.vpnInterfaceIpv6Address),
+                onTap: () => _editSingleValue(
+                  context,
+                  title: context.s('vpnInterfaceIpv6Address'),
+                  initial: settings.vpnInterfaceIpv6Address,
+                  validator: (value) => _validateVpnIpv6Address(context, value),
+                  onSave: (value) => controller.updateSettings({
+                    'vpnInterfaceIpv6Address': value,
+                  }),
+                ),
+              ),
+            ListTile(
+              leading: const Icon(Icons.straighten_rounded),
+              title: Text(context.s('vpnMtu')),
+              subtitle: Text(
+                '${settings.vpnMtu} · ${context.s('vpnMtuSummary')}',
+              ),
+              onTap: () => _editMtu(context, controller, settings.vpnMtu),
+            ),
+            ListTile(
+              leading: const Icon(Icons.filter_alt_outlined),
+              title: Text(context.s('dnsQueryStrategy')),
+              subtitle: Text(settings.dnsQueryStrategy),
+              onTap: () => _chooseValue(
+                context,
+                title: context.s('dnsQueryStrategy'),
+                current: settings.dnsQueryStrategy,
+                values: const {
+                  'Auto': 'Auto',
+                  'UseIP': 'IPv4 + IPv6',
+                  'UseIPv4': 'IPv4 only',
+                  'UseIPv6': 'IPv6 only',
+                  'UseSystem': 'System DNS strategy',
+                },
+                onSelected: (value) =>
+                    controller.updateSettings({'dnsQueryStrategy': value}),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.call_split_rounded),
+              title: Text(context.s('dnsParallelQuery')),
+              subtitle: Text(context.s('dnsParallelQuerySummary')),
+              value: settings.dnsParallelQuery,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'dnsParallelQuery': value}),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.cached_rounded),
+              title: Text(context.s('dnsServeStale')),
+              subtitle: Text(context.s('dnsServeStaleSummary')),
+              value: settings.dnsServeStale,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'dnsServeStale': value}),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.alt_route_rounded),
+              title: Text(context.s('directTargetStrategy')),
+              subtitle: Text(settings.directTargetStrategy),
+              onTap: () => _chooseValue(
+                context,
+                title: context.s('directTargetStrategy'),
+                current: settings.directTargetStrategy,
+                values: _xrayResolutionStrategies,
+                onSelected: (value) =>
+                    controller.updateSettings({'directTargetStrategy': value}),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.cloud_queue_rounded),
+              title: Text(context.s('proxyTargetStrategy')),
+              subtitle: Text(settings.proxyTargetStrategy),
+              onTap: () => _chooseValue(
+                context,
+                title: context.s('proxyTargetStrategy'),
+                current: settings.proxyTargetStrategy,
+                values: _xrayResolutionStrategies,
+                onSelected: (value) =>
+                    controller.updateSettings({'proxyTargetStrategy': value}),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.cable_rounded),
+              title: Text(context.s('proxyDialStrategy')),
+              subtitle: Text(settings.proxyDialStrategy),
+              onTap: () => _chooseValue(
+                context,
+                title: context.s('proxyDialStrategy'),
+                current: settings.proxyDialStrategy,
+                values: const {'Auto': 'Auto', ..._xrayResolutionStrategies},
+                onSelected: (value) =>
+                    controller.updateSettings({'proxyDialStrategy': value}),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.swap_horiz_rounded),
+              title: Text(context.s('happyEyeballs')),
+              subtitle: Text(context.s('happyEyeballsSummary')),
+              value: settings.happyEyeballs,
+              onChanged: settings.enableIpv6
+                  ? (value) => _perform(
+                      context,
+                      () => controller.updateSettings({'happyEyeballs': value}),
+                    )
+                  : null,
             ),
           ],
         ),

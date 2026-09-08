@@ -173,6 +173,7 @@ class AppStrings {
       'tunSettings': 'TUN settings',
       'invalidUrl': 'Enter a valid HTTP or HTTPS URL.',
       'coreSettings': 'Core settings',
+      'advancedSettings': 'Advanced settings',
       'enableIpv6': 'Enable IPv6',
       'enableIpv6Summary':
           'Allow Xray to resolve and connect to IPv6 destinations.',
@@ -459,6 +460,7 @@ class AppStrings {
       'tunSettings': 'تنظیمات TUN',
       'invalidUrl': 'یک آدرس معتبر HTTP یا HTTPS وارد کنید.',
       'coreSettings': 'تنظیمات هسته',
+      'advancedSettings': 'تنظیمات پیشرفته',
       'enableIpv6': 'فعال‌سازی IPv6',
       'enableIpv6Summary': 'اجازه به Xray برای اتصال به مقصدهای IPv6.',
       'preferIpv6': 'اولویت IPv6',

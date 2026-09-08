@@ -473,6 +473,25 @@ void WindowsBackendBridge::HandleMethodCall(
     result->Success(flutter::EncodableValue(true));
     return;
   }
+  if (method == "validateTunFrontendPrerequisites") {
+    if (!IsProcessElevated()) {
+      result->Error(
+          "tun_privilege",
+          "TUN mode requires administrator privileges. Restart niraN as administrator.");
+      return;
+    }
+    if (GetFileAttributesW(
+            (ExecutableDirectory() + L"\\sing-box\\sing-box.exe").c_str()) ==
+            INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(
+            (ExecutableDirectory() + L"\\sing-box\\libcronet.dll").c_str()) ==
+            INVALID_FILE_ATTRIBUTES) {
+      result->Error("tun_driver", "Bundled sing-box TUN frontend is missing");
+      return;
+    }
+    result->Success(flutter::EncodableValue(true));
+    return;
+  }
   if (method == "startXray") {
     const std::wstring config = Wide(StringArgument(call, "configPath"));
     const std::wstring executable = ExecutableDirectory() + L"\\xray\\xray.exe";

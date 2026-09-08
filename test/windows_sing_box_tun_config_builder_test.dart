@@ -25,6 +25,7 @@ void main() {
       xraySocksPort: 10808,
       iranCidrs: const ['2.144.0.0/14'],
       protectedProcessPaths: const [r'C:\niraN\xray\xray.exe'],
+      proxyServerHost: 'edge.example.com',
     );
     final root = jsonDecode(raw) as Map<String, dynamic>;
     final inbound = (root['inbounds'] as List).single as Map;
@@ -38,6 +39,17 @@ void main() {
     expect(proxy['server_port'], 10808);
     expect((root['route'] as Map)['final'], 'proxy');
     expect((root['log'] as Map)['level'], 'warn');
+    final dns = root['dns'] as Map;
+    expect((dns['servers'] as List).cast<Map>().first['detour'], isNull);
+    final remoteDns = (dns['servers'] as List).cast<Map>().firstWhere(
+      (server) => server['tag'] == 'remote-dns',
+    );
+    expect(remoteDns['server'], '8.8.8.8');
+    expect((remoteDns['tls'] as Map)['server_name'], 'dns.google');
+    expect(remoteDns['domain_resolver'], isNull);
+    expect((dns['rules'] as List).cast<Map>().first['domain'], [
+      'edge.example.com',
+    ]);
   });
 
   test('bypass Iran config routes frozen CIDRs and dot-ir directly', () {

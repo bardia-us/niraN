@@ -7,6 +7,7 @@ abstract interface class WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo();
   Future<void> exitApplication();
   Future<void> validateTunPrerequisites();
+  Future<void> validateTunFrontendPrerequisites();
   Future<void> startXray(String configPath, {required bool tunMode});
   Future<void> stopXray();
   Future<void> startTunFrontend(String configPath);
@@ -60,6 +61,10 @@ final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
   @override
   Future<void> validateTunPrerequisites() =>
       _channel.invokeMethod('validateTunPrerequisites');
+
+  @override
+  Future<void> validateTunFrontendPrerequisites() =>
+      _channel.invokeMethod('validateTunFrontendPrerequisites');
 
   @override
   Future<void> startXray(String configPath, {required bool tunMode}) =>

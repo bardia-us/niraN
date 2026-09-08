@@ -9,6 +9,7 @@ final class WindowsSingBoxTunConfigBuilder {
     required int xraySocksPort,
     required List<String> iranCidrs,
     required List<String> protectedProcessPaths,
+    String? proxyServerHost,
   }) {
     if (xraySocksPort < 1024 || xraySocksPort > 65535) {
       throw const FormatException('Xray SOCKS port is invalid');
@@ -29,7 +30,7 @@ final class WindowsSingBoxTunConfigBuilder {
 
     final config = <String, Object?>{
       'log': _log(settings),
-      'dns': _dns(settings, routingMode),
+      'dns': _dns(settings, routingMode, proxyServerHost),
       'inbounds': [
         {
           'type': 'tun',
@@ -107,11 +108,15 @@ final class WindowsSingBoxTunConfigBuilder {
     }
   }
 
-  Map<String, Object?> _dns(Map<String, Object?> settings, String routingMode) {
+  Map<String, Object?> _dns(
+    Map<String, Object?> settings,
+    String routingMode,
+    String? proxyServerHost,
+  ) {
     final bootstrap = _dnsServer(
       _firstResolver('${settings['vpnDns'] ?? '1.1.1.1'}'),
       tag: 'bootstrap-dns',
-      detour: 'proxy',
+      detour: null,
       domainResolver: null,
     );
     final remote = _dnsServer(
@@ -139,6 +144,14 @@ final class WindowsSingBoxTunConfigBuilder {
     return {
       'servers': servers,
       'rules': [
+        if (proxyServerHost != null &&
+            proxyServerHost.trim().isNotEmpty &&
+            InternetAddress.tryParse(proxyServerHost.trim()) == null)
+          {
+            'domain': [proxyServerHost.trim()],
+            'action': 'route',
+            'server': 'bootstrap-dns',
+          },
         if (routingMode == 'bypassIran')
           {
             'domain': ['localhost'],
@@ -166,7 +179,8 @@ final class WindowsSingBoxTunConfigBuilder {
     final parsed = raw.contains('://') ? Uri.tryParse(raw) : null;
     final scheme = parsed?.scheme.toLowerCase() ?? 'udp';
     final host = parsed?.host.isNotEmpty == true ? parsed!.host : raw;
-    final isIp = InternetAddress.tryParse(host) != null;
+    final connectHost = _knownEncryptedDnsAddress(scheme, host) ?? host;
+    final isIp = InternetAddress.tryParse(connectHost) != null;
     final server = <String, Object?>{
       'type': switch (scheme) {
         'https' => 'https',
@@ -176,7 +190,7 @@ final class WindowsSingBoxTunConfigBuilder {
         _ => throw const FormatException('Unsupported DNS resolver scheme'),
       },
       'tag': tag,
-      'server': host,
+      'server': connectHost,
       if (parsed?.hasPort == true) 'server_port': parsed!.port,
       if (scheme == 'https')
         'path': parsed?.path.isNotEmpty == true ? parsed!.path : '/dns-query',
@@ -186,6 +200,15 @@ final class WindowsSingBoxTunConfigBuilder {
     };
     if (detour != null) server['detour'] = detour;
     return server;
+  }
+
+  String? _knownEncryptedDnsAddress(String scheme, String host) {
+    if (scheme != 'https' && scheme != 'tls') return null;
+    return switch (host.toLowerCase()) {
+      'dns.google' => '8.8.8.8',
+      'cloudflare-dns.com' => '1.1.1.1',
+      _ => null,
+    };
   }
 
   List<Map<String, Object?>> _routeRules(

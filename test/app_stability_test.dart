@@ -689,6 +689,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.settings_outlined));
       await tester.pumpAndSettle();
+      await _expandSettingsSection(
+        tester,
+        'Advanced settings',
+        visibleChild: 'VPN MTU',
+      );
       await tester.scrollUntilVisible(
         find.text('VPN MTU'),
         250,

@@ -29,6 +29,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     RemoteAccessController? remoteAccess,
     AutoStartController? autoStartController,
     bool autoStartCore = true,
+    bool? useSingBoxTunFrontend,
   }) : _host = host ?? MethodChannelWindowsNativeHost(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _proxyReadinessProbe = proxyReadinessProbe,
@@ -39,7 +40,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
        _remoteAccess = remoteAccess ?? windowsRemoteAccess,
        _autoStartController =
            autoStartController ?? WindowsAutoStartController(),
-       _autoStartCore = autoStartCore {
+       _autoStartCore = autoStartCore,
+       _singBoxTunFrontendEnabled =
+           useSingBoxTunFrontend ?? _defaultSingBoxTunFrontendEnabled {
     final nativeHost = _host;
     if (nativeHost is MethodChannelWindowsNativeHost) {
       _traySubscription = nativeHost.trayActions.listen(_handleTrayAction);
@@ -52,10 +55,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   static const _connectTimeout = Duration(seconds: 8);
   static const _realDelayBatchTimeout = Duration(seconds: 5);
   static const _settingsSchemaVersion = 2;
-  // The sing-box TUN frontend is staged and validated independently. Keep the
-  // proven native Xray TUN path active until stop/monitor/restart integration
-  // is complete in a later checkpoint.
-  static const _useSingBoxTunFrontend = false;
+  // Keep an internal kill switch for support builds while using the validated
+  // sing-box frontend by default for Windows TUN.
+  static const _defaultSingBoxTunFrontendEnabled = bool.fromEnvironment(
+    'NIRAN_SINGBOX_TUN',
+    defaultValue: true,
+  );
 
   final WindowsNativeHostApi _host;
   final Directory _dataDirectory;
@@ -67,6 +72,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final RemoteAccessController _remoteAccess;
   final AutoStartController _autoStartController;
   final bool _autoStartCore;
+  final bool _singBoxTunFrontendEnabled;
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
   final _configBuilder = const WindowsXrayConfigBuilder();
@@ -100,6 +106,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   bool _initialized = false;
   bool _transitioning = false;
   bool _expectXray = false;
+  bool _expectTunFrontend = false;
+  bool _tunFrontendMayExist = false;
   bool _pollingXray = false;
   Future<Map<dynamic, dynamic>>? _subscriptionRefresh;
   Future<void>? _startupCompletion;
@@ -428,82 +436,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _transitioning = true;
     _setConnection('preparing', server);
     try {
-      await _ensureCoreCompatibility();
-      if (_coreVersionMismatch case final mismatch?) {
-        throw _platformError('core_version_mismatch', mismatch);
-      }
-      if (_tunEnabled) {
-        await _host.validateTunPrerequisites();
-        await _stopSpeedtestForTunTransition();
-      }
-      _warnUnsupportedProfileFeatures(server);
-      await _assertLocalProxyPortsAvailable();
-      final cidrs = await _loadIranCidrs();
-      final useSingBoxTun = _tunEnabled && _useSingBoxTunFrontend;
-      final xraySettings = useSingBoxTun
-          ? {..._settings, 'tunEnabled': false, 'routingMode': 'global'}
-          : _settings;
-      final config = _configBuilder.build(
-        server: server,
-        settings: xraySettings,
-        iranCidrs: cidrs,
-      );
-      await _xrayConfigFile.parent.create(recursive: true);
-      await _xrayConfigFile.writeAsString(config, flush: true);
-      if (useSingBoxTun) {
-        final tunConfig = _tunConfigBuilder.build(
-          settings: _settings,
-          xraySocksPort: _localSocksPort,
-          iranCidrs: cidrs,
-          protectedProcessPaths: _protectedCorePaths,
-        );
-        await _tunConfigFile.parent.create(recursive: true);
-        await _tunConfigFile.writeAsString(tunConfig, flush: true);
-      }
       _setConnection('connecting', server);
-      _log('info', 'Connection timing: Core startup requested');
-      await _host.startXray(
-        _xrayConfigFile.path,
-        tunMode: _tunEnabled && !useSingBoxTun,
-      );
-      _log(
-        'info',
-        'Connection timing: Core started ${timing.elapsedMilliseconds}ms',
-      );
-      _expectXray = true;
-      final proxyWait = Stopwatch()..start();
-      if (useSingBoxTun) {
-        await Future.wait([
-          _awaitProxyPort(_localSocksPort),
-          _awaitProxyPort(_localHttpPort),
-        ]);
-      } else {
-        await _awaitProxyPort(_localHttpPort);
-      }
-      _log(
-        'info',
-        'Connection timing: proxy ready ${proxyWait.elapsedMilliseconds}ms '
-            '(total ${timing.elapsedMilliseconds}ms)',
-      );
-      if (useSingBoxTun) {
-        final tunWait = Stopwatch()..start();
-        _log('info', 'Connection timing: sing-box TUN startup requested');
-        await _host.startTunFrontend(_tunConfigFile.path);
-        await _awaitTunReady();
-        _log(
-          'info',
-          'Connection timing: TUN ready ${tunWait.elapsedMilliseconds}ms '
-              '(total ${timing.elapsedMilliseconds}ms)',
-        );
-      }
-      if (_systemProxyEnabled) {
-        await _host.enableSystemProxy(_localHttpPort);
-      }
+      await _startCorePipeline(server, timing);
       _setConnection('connected', server);
       _log('info', 'Connection timing: ready ${timing.elapsedMilliseconds}ms');
       _log(
         'info',
-        useSingBoxTun
+        _usesSingBoxTun
             ? 'Connected: sing-box TUN -> local Xray SOCKS -> server'
             : _tunEnabled
             ? 'Connected with native Xray TUN'
@@ -526,6 +465,104 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
+  bool get _usesSingBoxTun => _tunEnabled && _singBoxTunFrontendEnabled;
+
+  Future<void> _startCorePipeline(
+    WindowsServerRecord server,
+    Stopwatch timing,
+  ) async {
+    await _ensureCoreCompatibility();
+    if (_coreVersionMismatch case final mismatch?) {
+      throw _platformError('core_version_mismatch', mismatch);
+    }
+    if (_singBoxVersionMismatch case final mismatch?) {
+      throw _platformError('core_version_mismatch', mismatch);
+    }
+    if (_tunEnabled) {
+      if (_usesSingBoxTun) {
+        await _host.validateTunFrontendPrerequisites();
+      } else {
+        await _host.validateTunPrerequisites();
+      }
+      await _stopSpeedtestForTunTransition();
+    }
+    _warnUnsupportedProfileFeatures(server);
+    await _assertLocalProxyPortsAvailable();
+    final cidrs = await _loadIranCidrs();
+    final xraySettings = _usesSingBoxTun
+        ? {
+            ..._settings,
+            'tunEnabled': false,
+            'routingMode': 'global',
+            // sing-box exclusively owns TUN DNS interception and routing.
+            // Keeping Xray's port-53 dns-out rule here creates a DNS loop when
+            // sing-box sends its bootstrap query through the local SOCKS port.
+            'enableLocalDns': false,
+            'enableFakeDns': false,
+            'directDnsEnabled': false,
+          }
+        : _settings;
+    final config = _configBuilder.build(
+      server: server,
+      settings: xraySettings,
+      iranCidrs: cidrs,
+    );
+    await _xrayConfigFile.parent.create(recursive: true);
+    await _xrayConfigFile.writeAsString(config, flush: true);
+    if (_usesSingBoxTun) {
+      final tunConfig = _tunConfigBuilder.build(
+        settings: _settings,
+        xraySocksPort: _localSocksPort,
+        iranCidrs: cidrs,
+        protectedProcessPaths: _protectedCorePaths,
+        proxyServerHost: server.address,
+      );
+      await _tunConfigFile.parent.create(recursive: true);
+      await _tunConfigFile.writeAsString(tunConfig, flush: true);
+    }
+
+    _log('info', 'Connection timing: Xray startup requested');
+    await _host.startXray(
+      _xrayConfigFile.path,
+      tunMode: _tunEnabled && !_usesSingBoxTun,
+    );
+    _expectXray = true;
+    _log(
+      'info',
+      'Connection timing: Xray started ${timing.elapsedMilliseconds}ms',
+    );
+    final proxyWait = Stopwatch()..start();
+    if (_usesSingBoxTun) {
+      await Future.wait([
+        _awaitProxyPort(_localSocksPort),
+        _awaitProxyPort(_localHttpPort),
+      ]);
+    } else {
+      await _awaitProxyPort(_localHttpPort);
+    }
+    _log(
+      'info',
+      'Connection timing: proxy ready ${proxyWait.elapsedMilliseconds}ms '
+          '(total ${timing.elapsedMilliseconds}ms)',
+    );
+    if (_usesSingBoxTun) {
+      final tunWait = Stopwatch()..start();
+      _log('info', 'Connection timing: sing-box TUN startup requested');
+      _tunFrontendMayExist = true;
+      await _host.startTunFrontend(_tunConfigFile.path);
+      _expectTunFrontend = true;
+      await _awaitTunReady();
+      _log(
+        'info',
+        'Connection timing: TUN ready ${tunWait.elapsedMilliseconds}ms '
+            '(total ${timing.elapsedMilliseconds}ms)',
+      );
+    }
+    if (_systemProxyEnabled) {
+      await _host.enableSystemProxy(_localHttpPort);
+    }
+  }
+
   String _normalizedVersion(String value) =>
       value.trim().toLowerCase().replaceFirst(RegExp(r'^v'), '');
 
@@ -544,7 +581,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       return;
     }
     _coreVersionMismatch = null;
-    if (_useSingBoxTunFrontend) {
+    if (_singBoxTunFrontendEnabled) {
       _singBoxVersion = await _host.getSingBoxVersion();
       final expectedSingBox = '${_buildConfig['expectedSingBoxVersion'] ?? ''}'
           .trim();
@@ -561,7 +598,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
     _log(
       'info',
-      _useSingBoxTunFrontend
+      _singBoxTunFrontendEnabled
           ? 'Runtime Cores verified: Xray $_coreVersion, '
                 'sing-box $_singBoxVersion'
           : 'Runtime Core verified: Xray $_coreVersion; staged sing-box TUN '
@@ -580,52 +617,24 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _transitioning = true;
     _setConnection('stopping', _activeServer);
     _expectXray = false;
+    _expectTunFrontend = false;
     _monitor?.cancel();
     _publicIpClient?.close(force: true);
     _publicIpClient = null;
     _pingGeneration++;
     _resetTestingPings();
-    Object? failure;
     try {
-      await Future.wait([
-        (() async {
-          try {
-            await _host.disableSystemProxy();
-          } on Object catch (error) {
-            failure = error;
-          }
-        })(),
-        (() async {
-          try {
-            await _host.stopXray();
-          } on Object catch (error) {
-            failure ??= error;
-          }
-        })(),
-        (() async {
-          try {
-            await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
-          } on Object {
-            // The dedicated speed-test job is bounded by the native host.
-          }
-        })(),
-      ]);
-      await _collectCoreLogs();
-      await _syncSystemProxyState();
-      if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
-      final disconnectFailure = failure;
-      if (disconnectFailure == null) {
-        _connection = _disconnectedConnection();
-        _emit('connectionState', _connection);
-        _log('info', 'Disconnected; Core/TUN stopped and proxy restored');
-      } else {
-        _setConnection(
-          'error',
-          _activeServer,
-          error: 'Disconnect cleanup failed: ${_safeError(disconnectFailure)}',
-        );
-        throw disconnectFailure;
-      }
+      await _stopCorePipeline();
+      _connection = _disconnectedConnection();
+      _emit('connectionState', _connection);
+      _log('info', 'Disconnected; Core/TUN stopped and proxy restored');
+    } on Object catch (error) {
+      _setConnection(
+        'error',
+        _activeServer,
+        error: 'Disconnect cleanup failed: ${_safeError(error)}',
+      );
+      rethrow;
     } finally {
       _transitioning = false;
     }
@@ -672,30 +681,20 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     try {
       _publicIpClient?.close(force: true);
       _publicIpClient = null;
-      if (_tunEnabled) {
-        await _host.validateTunPrerequisites();
-        await _stopSpeedtestForTunTransition();
-      }
-      await _host.stopXray();
-      await _collectCoreLogs();
-      _warnUnsupportedProfileFeatures(server);
-      await _assertLocalProxyPortsAvailable();
-      final config = _configBuilder.build(
-        server: server,
-        settings: _settings,
-        iranCidrs: await _loadIranCidrs(),
-      );
-      await _xrayConfigFile.writeAsString(config, flush: true);
-      await _host.startXray(_xrayConfigFile.path, tunMode: _tunEnabled);
-      _expectXray = true;
-      await _awaitProxyPort(_localHttpPort);
-      if (_tunEnabled) await _awaitTunReady();
-      if (_systemProxyEnabled) {
-        await _host.enableSystemProxy(_localHttpPort);
-      }
+      _expectXray = false;
+      _expectTunFrontend = false;
+      _monitor?.cancel();
+      _pingGeneration++;
+      _resetTestingPings();
+      await _stopCorePipeline(preserveSystemProxyPreference: true);
+      final timing = Stopwatch()..start();
+      await _startCorePipeline(server, timing);
       _setConnection('connected', server);
       _startMonitor();
-      _log('info', switching ? 'Xray switched server' : 'Xray restarted');
+      _log(
+        'info',
+        switching ? 'Connection switched server' : 'Connection restarted',
+      );
       unawaited(_updatePublicIp(server));
       if (_proxyReadinessProbe == null) {
         unawaited(_pingConnectedServer(server));
@@ -1455,34 +1454,42 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _syncSystemProxyState();
       if (!_expectXray || _transitioning) return;
       final status = await _host.getXrayStatus();
-      if (status['running'] == true) return;
-      _expectXray = false;
-      _monitor?.cancel();
-      Object? proxyRestoreFailure;
-      try {
-        await _host.disableSystemProxy();
-      } on Object catch (error) {
-        proxyRestoreFailure = error;
+      Map<dynamic, dynamic>? tunStatus;
+      if (_expectTunFrontend) {
+        tunStatus = await _host.getTunFrontendStatus();
       }
-      await _syncSystemProxyState();
+      final xrayRunning = status['running'] == true;
+      final tunRunning = !_expectTunFrontend || tunStatus?['running'] == true;
+      if (xrayRunning && tunRunning) return;
+      _expectXray = false;
+      _expectTunFrontend = false;
+      _monitor?.cancel();
+      Object? cleanupFailure;
+      try {
+        await _stopCorePipeline();
+      } on Object catch (error) {
+        cleanupFailure = error;
+      }
       final exitCode = status['exitCode'];
+      final tunExitCode = tunStatus?['exitCode'];
       final server = _activeServer;
-      final restoreSuffix = proxyRestoreFailure == null
+      final cleanupSuffix = cleanupFailure == null
           ? ''
-          : '; Windows proxy restore failed: '
-                '${_safeError(proxyRestoreFailure)}';
+          : '; cleanup failed: ${_safeError(cleanupFailure)}';
+      final failedCore = !xrayRunning ? 'Xray' : 'sing-box TUN';
+      final failedExitCode = !xrayRunning ? exitCode : tunExitCode;
       _setConnection(
         'error',
         server,
         error:
-            'Xray exited unexpectedly'
-            '${exitCode == null || exitCode == -1 ? '' : ' ($exitCode)'}$restoreSuffix',
+            '$failedCore exited unexpectedly'
+            '${failedExitCode == null || failedExitCode == -1 ? '' : ' ($failedExitCode)'}$cleanupSuffix',
       );
       _log(
         'error',
-        proxyRestoreFailure == null
-            ? 'Xray crashed; Windows proxy settings were restored'
-            : 'Xray crashed; Windows proxy restoration failed',
+        cleanupFailure == null
+            ? '$failedCore crashed; the connection pipeline was stopped'
+            : '$failedCore crashed; connection cleanup was incomplete',
       );
     } on Object catch (error) {
       _log('warning', 'Xray monitor failed: ${_safeError(error)}');
@@ -1493,12 +1500,19 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<void> _collectCoreLogs() async {
     try {
-      final lines = await _host.drainXrayLogs();
+      final xrayLines = await _host.drainXrayLogs();
+      final tunLines = _singBoxTunFrontendEnabled
+          ? await _host.drainTunFrontendLogs()
+          : const <String>[];
       final now = DateTime.now().millisecondsSinceEpoch;
       if (_recentCoreLogs.length > 100) {
         _recentCoreLogs.removeWhere((_, seen) => now - seen > 60000);
       }
-      for (final raw in lines) {
+      for (final entry in [
+        for (final line in xrayLines) ('Xray', line),
+        for (final line in tunLines) ('sing-box', line),
+      ]) {
+        final (source, raw) = entry;
         final line = _sanitize(raw.trim());
         if (line.isEmpty) continue;
         final lastSeen = _recentCoreLogs[line];
@@ -1511,7 +1525,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
               : lower.contains('warning')
               ? 'warning'
               : 'info',
-          'Xray: $line',
+          '$source: $line',
         );
       }
     } on Object {
@@ -1542,24 +1556,61 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> _awaitProxyPort(int port) =>
       _proxyReadinessProbe?.call(port) ?? _waitForPort(port);
 
-  Future<void> _bestEffortCleanup() async {
+  Future<void> _stopCorePipeline({
+    bool preserveSystemProxyPreference = false,
+  }) async {
+    final systemProxyWasEnabled = _systemProxyEnabled;
+    final shouldStopTunFrontend = _expectTunFrontend || _tunFrontendMayExist;
     _monitor?.cancel();
     _publicIpClient?.close(force: true);
     _publicIpClient = null;
+    _pingGeneration++;
+    _resetTestingPings();
+    _expectXray = false;
+    _expectTunFrontend = false;
+    Object? failure;
     try {
       await _host.disableSystemProxy();
-    } on Object {
-      // The native host keeps a persistent recovery marker for next launch.
+    } on Object catch (error) {
+      failure = error;
     }
-    await _syncSystemProxyState();
     try {
-      await _host.stopXray();
-    } on Object {
-      // The native job object prevents an orphan process when the app exits.
+      await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
+    } on Object catch (error) {
+      failure ??= error;
+    }
+    if (_singBoxTunFrontendEnabled && shouldStopTunFrontend) {
+      try {
+        await _host.stopTunFrontend().timeout(const Duration(seconds: 2));
+        _tunFrontendMayExist = false;
+      } on Object catch (error) {
+        failure ??= error;
+      }
+    }
+    try {
+      await _host.stopXray().timeout(const Duration(seconds: 2));
+    } on Object catch (error) {
+      failure ??= error;
     }
     await _collectCoreLogs();
+    await _syncSystemProxyState();
+    if (preserveSystemProxyPreference) {
+      _settings['systemProxyEnabled'] = systemProxyWasEnabled;
+    }
     if (await _xrayConfigFile.exists()) {
       await _xrayConfigFile.delete();
+    }
+    if (await _tunConfigFile.exists()) {
+      await _tunConfigFile.delete();
+    }
+    if (failure != null) throw failure;
+  }
+
+  Future<void> _bestEffortCleanup() async {
+    try {
+      await _stopCorePipeline();
+    } on Object catch (error) {
+      _log('warning', 'Connection cleanup failed: ${_safeError(error)}');
     }
   }
 
@@ -1572,6 +1623,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       return false;
     }
     _expectXray = false;
+    _expectTunFrontend = false;
     _monitor?.cancel();
     if (cleanup) await _bestEffortCleanup();
     _connection = _disconnectedConnection();
