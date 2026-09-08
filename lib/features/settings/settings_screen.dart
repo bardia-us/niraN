@@ -100,7 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.2',
+          appVersion: app?.appVersion ?? '0.3.3',
         );
       }),
     );
@@ -554,26 +554,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 },
                 onSelected: (value) =>
                     controller.updateSettings({'dnsQueryStrategy': value}),
-              ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.call_split_rounded),
-              title: Text(context.s('dnsParallelQuery')),
-              subtitle: Text(context.s('dnsParallelQuerySummary')),
-              value: settings.dnsParallelQuery,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({'dnsParallelQuery': value}),
-              ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.cached_rounded),
-              title: Text(context.s('dnsServeStale')),
-              subtitle: Text(context.s('dnsServeStaleSummary')),
-              value: settings.dnsServeStale,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({'dnsServeStale': value}),
               ),
             ),
             ListTile(

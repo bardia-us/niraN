@@ -61,9 +61,17 @@ Future<int> _probeWithHttpClient(
     for (var sample = 0; sample < 3; sample++) {
       final remaining = timeout - total.elapsed;
       if (remaining <= Duration.zero) break;
+      // A single transient handshake must not consume the entire test window.
+      // Keep enough budget for a retry, as v2rayN does for failed real-delay
+      // probes, while retaining three samples for a stable median.
+      final attemptsLeft = 3 - sample;
+      final fairShareMs = remaining.inMilliseconds ~/ attemptsLeft;
+      final attemptTimeout = Duration(
+        milliseconds: min(3000, max(1200, fairShareMs)),
+      );
       final connectionWatch = Stopwatch()..start();
       try {
-        final request = await client.getUrl(target).timeout(remaining);
+        final request = await client.getUrl(target).timeout(attemptTimeout);
         connectionWatch.stop();
         trace?.call(
           'tcp_connection',
@@ -77,14 +85,14 @@ Future<int> _probeWithHttpClient(
           total.elapsedMilliseconds,
           'sample_${sample + 1}',
         );
-        final response = await request.close().timeout(remaining);
+        final response = await request.close().timeout(attemptTimeout);
         responseWatch.stop();
         trace?.call(
           'response_headers',
           total.elapsedMilliseconds,
           'sample_${sample + 1}_status_${response.statusCode}_${responseWatch.elapsedMilliseconds}ms',
         );
-        await response.drain<void>().timeout(remaining);
+        await response.drain<void>().timeout(attemptTimeout);
         trace?.call(
           'request_complete',
           total.elapsedMilliseconds,
@@ -97,13 +105,13 @@ Future<int> _probeWithHttpClient(
         trace?.call(
           'sample_failed',
           total.elapsedMilliseconds,
-          'sample_${sample + 1}_${error.runtimeType}',
+          'sample_${sample + 1}_${error.runtimeType}_budget_${attemptTimeout.inMilliseconds}ms',
         );
       }
       if (sample < 2) {
         final pause = timeout - total.elapsed;
-        if (pause > const Duration(milliseconds: 75)) {
-          await Future<void>.delayed(const Duration(milliseconds: 75));
+        if (pause > const Duration(milliseconds: 100)) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
         }
       }
     }

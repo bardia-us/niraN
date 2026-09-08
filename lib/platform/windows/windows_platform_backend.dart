@@ -49,11 +49,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.2';
+  static const _appVersionFallback = '0.3.3';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
-  static const _realDelayBatchTimeout = Duration(seconds: 5);
   static const _settingsSchemaVersion = 2;
   // Keep an internal kill switch for support builds while using the validated
   // sing-box frontend by default for Windows TUN.
@@ -825,7 +824,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             ..pingStatus = delay > 0 ? 'success' : 'timeout';
           _emitPing(server);
         }().timeout(
-          const Duration(seconds: 5),
+          _realDelayOperationTimeout,
           onTimeout: () {
             if (generation != _pingGeneration) return;
             server
@@ -870,7 +869,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
           'info',
           'Latency timing: test Core started ${coreTiming.elapsedMilliseconds}ms',
         );
-        await Future.wait(httpPorts.map(_awaitProxyPort));
+        await Future.wait(
+          httpPorts.map(_awaitProxyPort),
+        ).timeout(const Duration(seconds: 4));
         _log(
           'info',
           'Latency timing: proxies ready ${coreTiming.elapsedMilliseconds}ms',
@@ -889,7 +890,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
               _emitPing(servers[index]);
             }(),
         ]);
-      }()).timeout(_realDelayBatchTimeout);
+      }()).timeout(_realDelayOperationTimeout);
     } on TimeoutException {
       acceptResults = false;
       if (generation == _pingGeneration) {
@@ -932,8 +933,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (target == null || !const {'http', 'https'}.contains(target.scheme)) {
       return -1;
     }
-    final configured = _integerSetting('realDelayTimeoutSeconds', 5);
-    final timeout = Duration(seconds: min(configured, 5));
+    final configured = _integerSetting('realDelayTimeoutSeconds', 8);
+    final timeout = Duration(seconds: configured.clamp(3, 15));
     return measureWindowsRealDelay(
       target: target,
       proxyPort: httpPort,
@@ -944,6 +945,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             }
           : null,
     );
+  }
+
+  Duration get _realDelayOperationTimeout {
+    final configured = _integerSetting('realDelayTimeoutSeconds', 8);
+    // Listener startup is measured separately and gets a small bounded grace
+    // period instead of racing the HTTP probe's own deadline.
+    return Duration(seconds: configured.clamp(3, 15) + 2);
   }
 
   Future<List<int>> _reserveTestPorts(int count) async {

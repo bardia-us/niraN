@@ -16,6 +16,8 @@ void main() {
     'vpnDns': '1.1.1.1',
     'remoteDns': 'https://dns.google/dns-query',
     'domesticDns': '223.5.5.5',
+    'dnsQueryStrategy': 'Auto',
+    'preferIpv6': false,
     'xrayLogLevel': 'warning',
   };
 
@@ -40,6 +42,7 @@ void main() {
     expect((root['route'] as Map)['final'], 'proxy');
     expect((root['log'] as Map)['level'], 'warn');
     final dns = root['dns'] as Map;
+    expect(dns['strategy'], 'ipv4_only');
     expect((dns['servers'] as List).cast<Map>().first['detour'], isNull);
     final remoteDns = (dns['servers'] as List).cast<Map>().firstWhere(
       (server) => server['tag'] == 'remote-dns',
@@ -50,6 +53,32 @@ void main() {
     expect((dns['rules'] as List).cast<Map>().first['domain'], [
       'edge.example.com',
     ]);
+  });
+
+  test('TUN DNS honors explicit dual-stack and IPv6 strategies', () {
+    final dualStack =
+        jsonDecode(
+              builder.build(
+                settings: {...settings(), 'dnsQueryStrategy': 'UseIP'},
+                xraySocksPort: 10808,
+                iranCidrs: const ['2.144.0.0/14'],
+                protectedProcessPaths: const [],
+              ),
+            )
+            as Map<String, dynamic>;
+    expect((dualStack['dns'] as Map)['strategy'], 'prefer_ipv4');
+
+    final ipv6Only =
+        jsonDecode(
+              builder.build(
+                settings: {...settings(), 'dnsQueryStrategy': 'UseIPv6'},
+                xraySocksPort: 10808,
+                iranCidrs: const ['2.144.0.0/14'],
+                protectedProcessPaths: const [],
+              ),
+            )
+            as Map<String, dynamic>;
+    expect((ipv6Only['dns'] as Map)['strategy'], 'ipv6_only');
   });
 
   test('bypass Iran config routes frozen CIDRs and dot-ir directly', () {

@@ -308,7 +308,19 @@ final class WindowsSingBoxTunConfigBuilder {
 
   String _dnsStrategy(Map<String, Object?> settings) {
     if (!_bool(settings, 'enableIpv6', true)) return 'ipv4_only';
-    return _bool(settings, 'preferIpv6', false) ? 'prefer_ipv6' : 'prefer_ipv4';
+    final configured = '${settings['dnsQueryStrategy'] ?? 'Auto'}';
+    return switch (configured) {
+      'UseIPv4' => 'ipv4_only',
+      'UseIPv6' => 'ipv6_only',
+      'UseIP' =>
+        _bool(settings, 'preferIpv6', false) ? 'prefer_ipv6' : 'prefer_ipv4',
+      // With Happy Eyeballs intentionally disabled, returning AAAA records in
+      // Auto mode lets Windows select an unreachable IPv6 path and wait for a
+      // full TCP timeout. Auto therefore uses the user's existing preference:
+      // the default is reliable IPv4, while an explicit IPv6 preference keeps
+      // dual-stack resolution.
+      _ => _bool(settings, 'preferIpv6', false) ? 'prefer_ipv6' : 'ipv4_only',
+    };
   }
 
   List<String> _items(String value) => value
