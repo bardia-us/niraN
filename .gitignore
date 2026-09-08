@@ -45,6 +45,8 @@ migrate_working_dir/
 /windows/runner/private_config.h
 /windows/xray/bin/*
 !/windows/xray/bin/.gitkeep
+/windows/sing-box/bin/*
+!/windows/sing-box/bin/.gitkeep
 
 # Machine-local configuration, credentials, signing material, and registry data
 .env

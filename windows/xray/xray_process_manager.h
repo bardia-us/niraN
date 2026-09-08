@@ -16,7 +16,8 @@ class XrayProcessManager {
   ~XrayProcessManager();
 
   bool Start(const std::wstring& executable, const std::wstring& config_path,
-             std::wstring* error);
+             std::wstring* error,
+             const std::wstring& process_label = L"Xray");
   bool Stop(std::wstring* error);
   bool IsRunning();
   DWORD ExitCode();

@@ -44,6 +44,7 @@ class WindowsBackendBridge {
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   XrayProcessManager xray_;
+  XrayProcessManager singbox_tun_;
   XrayProcessManager speedtest_xray_;
   SystemProxyManager proxy_;
   std::mutex shutdown_mutex_;

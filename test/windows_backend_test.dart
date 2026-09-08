@@ -1432,6 +1432,7 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
   Object? tunValidationFailure;
   String proxyState = 'niran';
   String coreVersion = 'v26.7.28';
+  bool tunFrontendRunning = false;
 
   @override
   Future<Map<dynamic, dynamic>> getBuildConfig() async => {
@@ -1456,6 +1457,9 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
 
   @override
   Future<String> getXrayVersion() async => coreVersion;
+
+  @override
+  Future<String> getSingBoxVersion() async => '1.14.0';
 
   @override
   Future<bool> recoverSystemProxy() async => false;
@@ -1510,6 +1514,27 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
     calls.add('stop');
     running = false;
   }
+
+  @override
+  Future<void> startTunFrontend(String configPath) async {
+    calls.add('startTunFrontend');
+    tunFrontendRunning = true;
+  }
+
+  @override
+  Future<void> stopTunFrontend() async {
+    calls.add('stopTunFrontend');
+    tunFrontendRunning = false;
+  }
+
+  @override
+  Future<Map<dynamic, dynamic>> getTunFrontendStatus() async => {
+    'running': tunFrontendRunning,
+    if (!tunFrontendRunning) 'exitCode': 0,
+  };
+
+  @override
+  Future<List<String>> drainTunFrontendLogs() async => const [];
 
   @override
   Future<void> startSpeedtestXray(String configPath) async {

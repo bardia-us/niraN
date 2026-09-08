@@ -11,6 +11,19 @@
 The complete Xray license is distributed as `xray/LICENSE` in the Windows
 bundle.
 
+## sing-box
+
+- Project: <https://github.com/SagerNet/sing-box>
+- Bundled version: `v1.14.0` (official Windows amd64 release)
+- License: GNU General Public License v3.0 or later (GPL-3.0-or-later)
+- Use: TUN frontend only; traffic is forwarded to the existing local Xray
+  SOCKS inbound.
+- Provisioning: `tool/download_sing_box.ps1` downloads the official archive
+  and verifies its pinned SHA-256 before use.
+
+The complete sing-box license is distributed as `sing-box/LICENSE` in the
+Windows bundle.
+
 ## Twemoji country flags
 
 - Project: <https://github.com/jdecked/twemoji>

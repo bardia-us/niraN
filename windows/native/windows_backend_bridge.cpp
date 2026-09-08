@@ -69,10 +69,14 @@ std::wstring ExecutableDirectory() {
   return separator == std::wstring::npos ? L"" : path.substr(0, separator);
 }
 
-std::string RuntimeXrayVersion(std::wstring* error) {
-  const std::wstring executable = ExecutableDirectory() + L"\\xray\\xray.exe";
+std::string RuntimeCoreVersion(const std::wstring& relative_executable,
+                               const std::string& marker,
+                               bool prepend_v,
+                               const std::wstring& core_name,
+                               std::wstring* error) {
+  const std::wstring executable = ExecutableDirectory() + relative_executable;
   if (GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES) {
-    if (error != nullptr) *error = L"Bundled xray.exe is missing";
+    if (error != nullptr) *error = L"Bundled " + core_name + L" is missing";
     return {};
   }
 
@@ -104,7 +108,9 @@ std::string RuntimeXrayVersion(std::wstring* error) {
   CloseHandle(write_pipe);
   if (!started) {
     CloseHandle(read_pipe);
-    if (error != nullptr) *error = L"Could not execute the bundled Xray Core";
+    if (error != nullptr) {
+      *error = L"Could not execute the bundled " + core_name;
+    }
     return {};
   }
 
@@ -123,20 +129,32 @@ std::string RuntimeXrayVersion(std::wstring* error) {
   }
   CloseHandle(read_pipe);
   if (wait != WAIT_OBJECT_0) {
-    if (error != nullptr) *error = L"Xray Core version check timed out";
+    if (error != nullptr) *error = core_name + L" version check timed out";
     return {};
   }
 
-  const size_t marker = output.find("Xray ");
-  if (marker == std::string::npos) {
-    if (error != nullptr) *error = L"Xray Core returned an unknown version";
+  const size_t marker_offset = output.find(marker);
+  if (marker_offset == std::string::npos) {
+    if (error != nullptr) *error = core_name + L" returned an unknown version";
     return {};
   }
-  const size_t begin = marker + 5;
+  const size_t begin = marker_offset + marker.size();
   const size_t end = output.find_first_of(" \t\r\n", begin);
   std::string version = output.substr(begin, end - begin);
-  if (!version.empty() && version.front() != 'v') version.insert(0, "v");
+  if (prepend_v && !version.empty() && version.front() != 'v') {
+    version.insert(0, "v");
+  }
   return version;
+}
+
+std::string RuntimeXrayVersion(std::wstring* error) {
+  return RuntimeCoreVersion(L"\\xray\\xray.exe", "Xray ", true,
+                            L"Xray Core", error);
+}
+
+std::string RuntimeSingBoxVersion(std::wstring* error) {
+  return RuntimeCoreVersion(L"\\sing-box\\sing-box.exe", "sing-box version ",
+                            false, L"sing-box", error);
 }
 
 const flutter::EncodableValue* Argument(
@@ -342,6 +360,8 @@ void WindowsBackendBridge::Shutdown() {
   std::wstring ignored;
   proxy_.Disable(&ignored);
   speedtest_xray_.Stop(&ignored);
+  singbox_tun_.Stop(&ignored);
+  tun_running_.store(false);
   xray_.Stop(&ignored);
   shutdown_ = true;
 }
@@ -408,6 +428,8 @@ void WindowsBackendBridge::HandleMethodCall(
         flutter::EncodableValue(FLUTTER_VERSION);
     values[flutter::EncodableValue("expectedCoreVersion")] =
         flutter::EncodableValue(Utf8(private_config::kXrayVersion));
+    values[flutter::EncodableValue("expectedSingBoxVersion")] =
+        flutter::EncodableValue(Utf8(private_config::kSingBoxVersion));
     result->Success(flutter::EncodableValue(values));
     return;
   }
@@ -442,7 +464,8 @@ void WindowsBackendBridge::HandleMethodCall(
           "TUN mode requires administrator privileges. Restart niraN as administrator.");
       return;
     }
-    if (GetFileAttributesW((ExecutableDirectory() + L"\\xray\\wintun.dll").c_str()) ==
+    if (GetFileAttributesW(
+            (ExecutableDirectory() + L"\\xray\\wintun.dll").c_str()) ==
         INVALID_FILE_ATTRIBUTES) {
       result->Error("tun_driver", "Bundled wintun.dll is missing");
       return;
@@ -473,9 +496,7 @@ void WindowsBackendBridge::HandleMethodCall(
     RunProcessOperation(
         std::move(result), "xray_start",
         [this, executable, config, tun_mode](std::wstring* error) {
-          const bool started = xray_.Start(executable, config, error);
-          tun_running_.store(started && tun_mode);
-          return started;
+          return xray_.Start(executable, config, error);
         });
     return;
   }
@@ -483,9 +504,61 @@ void WindowsBackendBridge::HandleMethodCall(
     RunProcessOperation(std::move(result), "xray_stop",
                         [this](std::wstring* error) {
                           const bool stopped = xray_.Stop(error);
+                          return stopped;
+                        });
+    return;
+  }
+  if (method == "startTunFrontend") {
+    const std::wstring config = Wide(StringArgument(call, "configPath"));
+    const std::wstring executable =
+        ExecutableDirectory() + L"\\sing-box\\sing-box.exe";
+    if (config.empty()) {
+      result->Error("invalid_config", "Generated sing-box TUN config path is invalid");
+      return;
+    }
+    if (!IsProcessElevated()) {
+      result->Error(
+          "tun_privilege",
+          "TUN mode requires administrator privileges. Restart niraN as administrator.");
+      return;
+    }
+    RunProcessOperation(
+        std::move(result), "tun_startup",
+        [this, executable, config](std::wstring* error) {
+          const bool started =
+              singbox_tun_.Start(executable, config, error, L"sing-box");
+          tun_running_.store(started);
+          return started;
+        });
+    return;
+  }
+  if (method == "stopTunFrontend") {
+    RunProcessOperation(std::move(result), "tun_stop",
+                        [this](std::wstring* error) {
+                          const bool stopped = singbox_tun_.Stop(error);
                           if (stopped) tun_running_.store(false);
                           return stopped;
                         });
+    return;
+  }
+  if (method == "getTunFrontendStatus") {
+    const bool running = singbox_tun_.IsRunning();
+    flutter::EncodableMap status;
+    status[flutter::EncodableValue("running")] =
+        flutter::EncodableValue(running);
+    status[flutter::EncodableValue("exitCode")] = running
+        ? flutter::EncodableValue()
+        : flutter::EncodableValue(static_cast<int64_t>(
+              static_cast<int32_t>(singbox_tun_.ExitCode())));
+    result->Success(flutter::EncodableValue(status));
+    return;
+  }
+  if (method == "drainTunFrontendLogs") {
+    flutter::EncodableList lines;
+    for (std::string& line : singbox_tun_.DrainLogs()) {
+      lines.emplace_back(std::move(line));
+    }
+    result->Success(flutter::EncodableValue(lines));
     return;
   }
   if (method == "startSpeedtestXray") {
@@ -534,6 +607,16 @@ void WindowsBackendBridge::HandleMethodCall(
     const std::string version = RuntimeXrayVersion(&error);
     if (version.empty()) {
       result->Error("core_version", Utf8(error));
+      return;
+    }
+    result->Success(flutter::EncodableValue(version));
+    return;
+  }
+  if (method == "getSingBoxVersion") {
+    std::wstring error;
+    const std::string version = RuntimeSingBoxVersion(&error);
+    if (version.empty()) {
+      result->Error("tun_version", Utf8(error));
       return;
     }
     result->Success(flutter::EncodableValue(version));

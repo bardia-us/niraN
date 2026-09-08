@@ -9,6 +9,9 @@ set(NIRAN_XRAY_EXE "${CMAKE_CURRENT_SOURCE_DIR}/xray/bin/xray-v26.7.28.exe")
 set(NIRAN_XRAY_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/xray/bin/LICENSE")
 set(NIRAN_WINTUN_DLL "${CMAKE_CURRENT_SOURCE_DIR}/xray/bin/wintun.dll")
 set(NIRAN_WINTUN_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/xray/bin/WINTUN_LICENSE.txt")
+set(NIRAN_SINGBOX_EXE "${CMAKE_CURRENT_SOURCE_DIR}/sing-box/bin/sing-box-v1.14.0.exe")
+set(NIRAN_SINGBOX_CRONET "${CMAKE_CURRENT_SOURCE_DIR}/sing-box/bin/libcronet.dll")
+set(NIRAN_SINGBOX_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/sing-box/bin/LICENSE")
 if(NOT EXISTS "${NIRAN_XRAY_EXE}")
   execute_process(
     COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -29,6 +32,19 @@ if(NOT EXISTS "${NIRAN_WINTUN_DLL}")
   )
   if(NOT NIRAN_WINTUN_DOWNLOAD_RESULT EQUAL 0 OR NOT EXISTS "${NIRAN_WINTUN_DLL}")
     message(FATAL_ERROR "Unable to provision pinned Wintun. Run tool/download_wintun.ps1 and retry.")
+  endif()
+endif()
+if(NOT EXISTS "${NIRAN_SINGBOX_EXE}" OR NOT EXISTS "${NIRAN_SINGBOX_CRONET}")
+  execute_process(
+    COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/../tool/download_sing_box.ps1"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    RESULT_VARIABLE NIRAN_SINGBOX_DOWNLOAD_RESULT
+  )
+  if(NOT NIRAN_SINGBOX_DOWNLOAD_RESULT EQUAL 0 OR
+     NOT EXISTS "${NIRAN_SINGBOX_EXE}" OR
+     NOT EXISTS "${NIRAN_SINGBOX_CRONET}")
+    message(FATAL_ERROR "Unable to provision pinned sing-box. Run tool/download_sing_box.ps1 and retry.")
   endif()
 endif()
 
@@ -124,6 +140,10 @@ install(FILES "${NIRAN_XRAY_EXE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/xray"
   RENAME "xray.exe" COMPONENT Runtime)
 install(FILES "${NIRAN_WINTUN_DLL}" DESTINATION "${CMAKE_INSTALL_PREFIX}/xray"
   COMPONENT Runtime)
+install(FILES "${NIRAN_SINGBOX_EXE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/sing-box"
+  RENAME "sing-box.exe" COMPONENT Runtime)
+install(FILES "${NIRAN_SINGBOX_CRONET}" DESTINATION "${CMAKE_INSTALL_PREFIX}/sing-box"
+  COMPONENT Runtime)
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/../README.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/../THIRD_PARTY_NOTICES.md"
@@ -135,6 +155,10 @@ if(EXISTS "${NIRAN_XRAY_LICENSE}")
 endif()
 if(EXISTS "${NIRAN_WINTUN_LICENSE}")
   install(FILES "${NIRAN_WINTUN_LICENSE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/xray"
+    COMPONENT Runtime)
+endif()
+if(EXISTS "${NIRAN_SINGBOX_LICENSE}")
+  install(FILES "${NIRAN_SINGBOX_LICENSE}" DESTINATION "${CMAKE_INSTALL_PREFIX}/sing-box"
     COMPONENT Runtime)
 endif()
 

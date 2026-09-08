@@ -13,6 +13,7 @@ import 'windows_real_delay.dart';
 import 'windows_remote_access.dart';
 import 'windows_server_record.dart';
 import 'windows_server_order_policy.dart';
+import 'windows_sing_box_tun_config_builder.dart';
 import 'windows_subscription_parser.dart';
 import 'windows_xray_config_builder.dart';
 
@@ -51,6 +52,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   static const _connectTimeout = Duration(seconds: 8);
   static const _realDelayBatchTimeout = Duration(seconds: 5);
   static const _settingsSchemaVersion = 2;
+  // The sing-box TUN frontend is staged and validated independently. Keep the
+  // proven native Xray TUN path active until stop/monitor/restart integration
+  // is complete in a later checkpoint.
+  static const _useSingBoxTunFrontend = false;
 
   final WindowsNativeHostApi _host;
   final Directory _dataDirectory;
@@ -65,6 +70,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
   final _configBuilder = const WindowsXrayConfigBuilder();
+  final _tunConfigBuilder = const WindowsSingBoxTunConfigBuilder();
   final _orderPolicy = const WindowsServerOrderPolicy();
 
   List<WindowsServerRecord> _servers = [];
@@ -83,6 +89,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   int _pingGeneration = 0;
   String _coreVersion = 'Unavailable';
   String? _coreVersionMismatch;
+  String _singBoxVersion = 'Unavailable';
+  String? _singBoxVersionMismatch;
   String _appVersion = _appVersionFallback;
   String? _subscriptionError;
   Map<String, Object?> _connection = _disconnectedConnection();
@@ -107,6 +115,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   File get _xrayConfigFile => File('${_dataDirectory.path}\\xray\\config.json');
   File get _speedtestConfigFile =>
       File('${_dataDirectory.path}\\xray\\speedtest.json');
+  File get _tunConfigFile => File('${_dataDirectory.path}\\sing-box\\tun.json');
+  List<String> get _protectedCorePaths {
+    final executableDirectory = File(Platform.resolvedExecutable).parent.path;
+    return [
+      '$executableDirectory\\xray\\xray.exe',
+      '$executableDirectory\\sing-box\\sing-box.exe',
+    ];
+  }
 
   @override
   Future<Map<dynamic, dynamic>> initialize() async {
@@ -124,6 +140,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _loadSubscriptionCache(),
       (() async {
         if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
+        if (await _tunConfigFile.exists()) await _tunConfigFile.delete();
       })(),
     ]);
     _buildConfig = Map<String, Object?>.from(await _host.getBuildConfig());
@@ -422,30 +439,56 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _warnUnsupportedProfileFeatures(server);
       await _assertLocalProxyPortsAvailable();
       final cidrs = await _loadIranCidrs();
+      final useSingBoxTun = _tunEnabled && _useSingBoxTunFrontend;
+      final xraySettings = useSingBoxTun
+          ? {..._settings, 'tunEnabled': false, 'routingMode': 'global'}
+          : _settings;
       final config = _configBuilder.build(
         server: server,
-        settings: _settings,
+        settings: xraySettings,
         iranCidrs: cidrs,
       );
       await _xrayConfigFile.parent.create(recursive: true);
       await _xrayConfigFile.writeAsString(config, flush: true);
+      if (useSingBoxTun) {
+        final tunConfig = _tunConfigBuilder.build(
+          settings: _settings,
+          xraySocksPort: _localSocksPort,
+          iranCidrs: cidrs,
+          protectedProcessPaths: _protectedCorePaths,
+        );
+        await _tunConfigFile.parent.create(recursive: true);
+        await _tunConfigFile.writeAsString(tunConfig, flush: true);
+      }
       _setConnection('connecting', server);
       _log('info', 'Connection timing: Core startup requested');
-      await _host.startXray(_xrayConfigFile.path, tunMode: _tunEnabled);
+      await _host.startXray(
+        _xrayConfigFile.path,
+        tunMode: _tunEnabled && !useSingBoxTun,
+      );
       _log(
         'info',
         'Connection timing: Core started ${timing.elapsedMilliseconds}ms',
       );
       _expectXray = true;
       final proxyWait = Stopwatch()..start();
-      await _awaitProxyPort(_localHttpPort);
+      if (useSingBoxTun) {
+        await Future.wait([
+          _awaitProxyPort(_localSocksPort),
+          _awaitProxyPort(_localHttpPort),
+        ]);
+      } else {
+        await _awaitProxyPort(_localHttpPort);
+      }
       _log(
         'info',
         'Connection timing: proxy ready ${proxyWait.elapsedMilliseconds}ms '
             '(total ${timing.elapsedMilliseconds}ms)',
       );
-      if (_tunEnabled) {
+      if (useSingBoxTun) {
         final tunWait = Stopwatch()..start();
+        _log('info', 'Connection timing: sing-box TUN startup requested');
+        await _host.startTunFrontend(_tunConfigFile.path);
         await _awaitTunReady();
         _log(
           'info',
@@ -460,8 +503,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _log('info', 'Connection timing: ready ${timing.elapsedMilliseconds}ms');
       _log(
         'info',
-        _tunEnabled
-            ? 'Connected with local proxies and Windows TUN'
+        useSingBoxTun
+            ? 'Connected: sing-box TUN -> local Xray SOCKS -> server'
+            : _tunEnabled
+            ? 'Connected with native Xray TUN'
             : 'Connected with local SOCKS/HTTP proxies',
       );
       _startMonitor();
@@ -499,6 +544,29 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       return;
     }
     _coreVersionMismatch = null;
+    if (_useSingBoxTunFrontend) {
+      _singBoxVersion = await _host.getSingBoxVersion();
+      final expectedSingBox = '${_buildConfig['expectedSingBoxVersion'] ?? ''}'
+          .trim();
+      if (expectedSingBox.isNotEmpty &&
+          _normalizedVersion(_singBoxVersion) !=
+              _normalizedVersion(expectedSingBox)) {
+        _singBoxVersionMismatch =
+            'Bundled sing-box $_singBoxVersion does not match expected '
+            '$expectedSingBox';
+        _log('error', _singBoxVersionMismatch!);
+        return;
+      }
+      _singBoxVersionMismatch = null;
+    }
+    _log(
+      'info',
+      _useSingBoxTunFrontend
+          ? 'Runtime Cores verified: Xray $_coreVersion, '
+                'sing-box $_singBoxVersion'
+          : 'Runtime Core verified: Xray $_coreVersion; staged sing-box TUN '
+                'frontend is disabled',
+    );
   }
 
   @override

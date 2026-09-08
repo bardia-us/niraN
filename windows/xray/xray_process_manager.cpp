@@ -56,11 +56,13 @@ XrayProcessManager::~XrayProcessManager() {
 
 bool XrayProcessManager::Start(const std::wstring& executable,
                                const std::wstring& config_path,
-                               std::wstring* error) {
+                               std::wstring* error,
+                               const std::wstring& process_label) {
   std::wstring stop_error;
   if (!Stop(&stop_error)) {
     if (error != nullptr) {
-      *error = L"Unable to stop the previous niraN Xray process: " +
+      *error = L"Unable to stop the previous niraN " + process_label +
+               L" process: " +
                stop_error;
     }
     return false;
@@ -68,13 +70,13 @@ bool XrayProcessManager::Start(const std::wstring& executable,
 
   if (GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES) {
     if (error != nullptr) {
-      *error = L"Bundled xray.exe is missing";
+      *error = L"Bundled " + process_label + L" executable is missing";
     }
     return false;
   }
   if (GetFileAttributesW(config_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
     if (error != nullptr) {
-      *error = L"Generated Xray config is missing";
+      *error = L"Generated " + process_label + L" config is missing";
     }
     return false;
   }
@@ -89,7 +91,10 @@ bool XrayProcessManager::Start(const std::wstring& executable,
     const DWORD code = GetLastError();
     if (output_read != nullptr) CloseHandle(output_read);
     if (output_write != nullptr) CloseHandle(output_write);
-    if (error != nullptr) *error = ErrorCode(L"Creating Xray log pipe", code);
+    if (error != nullptr) {
+      *error = ErrorCode((L"Creating " + process_label + L" log pipe").c_str(),
+                         code);
+    }
     return false;
   }
 
@@ -170,7 +175,7 @@ bool XrayProcessManager::Start(const std::wstring& executable,
     Stop(&ignored);
     if (error != nullptr) {
       const int32_t normalized_exit = static_cast<int32_t>(early_exit);
-      *error = L"Xray exited during startup";
+      *error = process_label + L" exited during startup";
       if (normalized_exit != -1) {
         *error += L" (" + std::to_wstring(normalized_exit) + L")";
       }

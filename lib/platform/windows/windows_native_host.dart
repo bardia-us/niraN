@@ -9,6 +9,11 @@ abstract interface class WindowsNativeHostApi {
   Future<void> validateTunPrerequisites();
   Future<void> startXray(String configPath, {required bool tunMode});
   Future<void> stopXray();
+  Future<void> startTunFrontend(String configPath);
+  Future<void> stopTunFrontend();
+  Future<Map<dynamic, dynamic>> getTunFrontendStatus();
+  Future<List<String>> drainTunFrontendLogs();
+  Future<String> getSingBoxVersion();
   Future<void> startSpeedtestXray(String configPath);
   Future<void> stopSpeedtestXray();
   Future<Map<dynamic, dynamic>> getXrayStatus();
@@ -65,6 +70,32 @@ final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
 
   @override
   Future<void> stopXray() => _channel.invokeMethod('stopXray');
+
+  @override
+  Future<void> startTunFrontend(String configPath) =>
+      _channel.invokeMethod('startTunFrontend', {'configPath': configPath});
+
+  @override
+  Future<void> stopTunFrontend() => _channel.invokeMethod('stopTunFrontend');
+
+  @override
+  Future<Map<dynamic, dynamic>> getTunFrontendStatus() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getTunFrontendStatus',
+      )) ??
+      {};
+
+  @override
+  Future<List<String>> drainTunFrontendLogs() async =>
+      (await _channel.invokeMethod<List<dynamic>>(
+        'drainTunFrontendLogs',
+      ))?.map((line) => '$line').toList(growable: false) ??
+      const [];
+
+  @override
+  Future<String> getSingBoxVersion() async =>
+      (await _channel.invokeMethod<String>('getSingBoxVersion')) ??
+      'Unavailable';
 
   @override
   Future<void> startSpeedtestXray(String configPath) =>

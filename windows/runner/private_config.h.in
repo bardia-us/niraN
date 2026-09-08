@@ -5,6 +5,7 @@ namespace niran::private_config {
 inline constexpr wchar_t kTelegramUrl[] = LR"niran(@NIRAN_TELEGRAM_URL@)niran";
 inline constexpr wchar_t kTelegramContact[] = LR"niran(@NIRAN_TELEGRAM_CONTACT@)niran";
 inline constexpr wchar_t kXrayVersion[] = L"v26.7.28";
+inline constexpr wchar_t kSingBoxVersion[] = L"1.14.0";
 }  // namespace niran::private_config
 
 #endif  // RUNNER_PRIVATE_CONFIG_H_
