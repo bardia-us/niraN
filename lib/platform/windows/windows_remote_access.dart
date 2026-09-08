@@ -177,7 +177,12 @@ final class WindowsRemoteAccessService
     }
     final active = _operation;
     if (active != null) return active;
-    final operation = _token == null ? _register() : _status();
+    final operation = _token == null
+        ? _register()
+        : (() async {
+            await _refreshRuntimeVersion();
+            await _status();
+          })();
     _operation = operation;
     try {
       await operation;
@@ -199,7 +204,11 @@ final class WindowsRemoteAccessService
     // The protected subscription request performs the authoritative access
     // check itself, so do not issue a redundant status request immediately
     // before it. Missing credentials still require registration.
-    if (_token == null) await _register();
+    if (_token == null) {
+      await _register();
+    } else {
+      await _refreshRuntimeVersion();
+    }
     var response = await _transport.send(
       _authorizedPayload('subscription'),
       token: _token,
@@ -293,6 +302,16 @@ final class WindowsRemoteAccessService
       'first_seen': updated['first_seen'],
       'last_seen': updated['last_seen'],
     };
+  }
+
+  Future<void> _refreshRuntimeVersion() async {
+    final current = _record;
+    if (current == null) return;
+    final info = await _infoProvider.read();
+    final version = _clean(info.appVersion, '0.3.3');
+    if (current['app_version'] == version) return;
+    _record = {...current, 'app_version': version};
+    await _persist();
   }
 
   Map<String, Object?> _authorizedPayload(String action) {

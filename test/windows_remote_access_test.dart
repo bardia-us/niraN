@@ -102,19 +102,53 @@ void main() {
     expect(await restarted.initialize(), isTrue);
     expect(transport.payloads.last['action'], 'status');
   });
+
+  test(
+    'an existing registration reports the upgraded runtime version',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-access-version-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final transport = _RegistryTransport();
+      final oldService = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(),
+        transport: transport,
+        dataDirectory: directory,
+      );
+      await oldService.accept();
+      expect(transport.payloads.last['app_version'], '0.3.1');
+
+      final upgraded = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(appVersion: '0.3.3+6'),
+        transport: transport,
+        dataDirectory: directory,
+      );
+      expect(await upgraded.initialize(), isTrue);
+      await upgraded.requireAllowed();
+      expect(transport.payloads.last['action'], 'status');
+      expect(transport.payloads.last['app_version'], '0.3.3+6');
+
+      await upgraded.fetchSubscription();
+      expect(transport.payloads.last['action'], 'subscription');
+      expect(transport.payloads.last['app_version'], '0.3.3+6');
+    },
+  );
 }
 
 final class _InfoProvider implements DeviceRegistrationInfoProvider {
-  const _InfoProvider();
+  const _InfoProvider({this.appVersion = '0.3.1'});
+
+  final String appVersion;
 
   static const rawSystemId = '0123456789abcdef0123456789abcdef';
 
   @override
-  Future<DeviceRegistrationInfo> read() async => const DeviceRegistrationInfo(
+  Future<DeviceRegistrationInfo> read() async => DeviceRegistrationInfo(
     deviceName: 'DESKTOP-TEST',
     windowsUsername: 'Test User',
     windowsVersion: 'Windows 11 24H2',
-    appVersion: '0.3.1',
+    appVersion: appVersion,
     systemId: rawSystemId,
     systemIdSource: 'tpm',
   );
