@@ -74,7 +74,7 @@ class GitHubUpdateChecker {
       final request = await client.getUrl(Uri.parse(nirangLatestReleaseApi));
       request.headers
         ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
-        ..set(HttpHeaders.userAgentHeader, 'niraN-update-checker/0.3.3');
+        ..set(HttpHeaders.userAgentHeader, 'niraN-update-checker/0.3.4');
       final response = await request.close().timeout(
         const Duration(seconds: 10),
       );
@@ -101,6 +101,7 @@ class GitHubUpdateChecker {
       ReleaseAsset? windowsAsset;
       final assets = payload['assets'];
       if (assets is List) {
+        final candidates = <ReleaseAsset>[];
         for (final value in assets.whereType<Map>()) {
           final name = '${value['name'] ?? ''}';
           final lower = name.toLowerCase();
@@ -124,14 +125,20 @@ class GitHubUpdateChecker {
           final digest = RegExp(
             r'^sha256:([0-9a-fA-F]{64})$',
           ).firstMatch(rawDigest)?.group(1)?.toLowerCase();
-          windowsAsset = ReleaseAsset(
-            name: name,
-            url: url,
-            size: (value['size'] as num?)?.toInt() ?? 0,
-            sha256: digest,
+          candidates.add(
+            ReleaseAsset(
+              name: name,
+              url: url,
+              size: (value['size'] as num?)?.toInt() ?? 0,
+              sha256: digest,
+            ),
           );
-          break;
         }
+        candidates.sort(
+          (left, right) =>
+              _assetPriority(left.name).compareTo(_assetPriority(right.name)),
+        );
+        windowsAsset = candidates.firstOrNull;
       }
       return ReleaseCheckResult(
         latestVersion: latest,
@@ -143,5 +150,12 @@ class GitHubUpdateChecker {
     } finally {
       client.close(force: true);
     }
+  }
+
+  static int _assetPriority(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.zip')) return 0;
+    if (lower.endsWith('.exe')) return 1;
+    return 2;
   }
 }

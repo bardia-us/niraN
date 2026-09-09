@@ -49,7 +49,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.3';
+  static const _appVersionFallback = '0.3.4';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -136,6 +136,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (_initialized) return _bootstrap();
     if (_traySubscription?.isPaused == true) _traySubscription?.resume();
     await _dataDirectory.create(recursive: true);
+    await Future.wait([
+      _recoverAtomicFile(_stateFile),
+      _recoverAtomicFile(_subscriptionFile),
+    ]);
     final recoveredFuture = _host.recoverSystemProxy().catchError((
       Object error,
     ) {
@@ -544,6 +548,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'Connection timing: proxy ready ${proxyWait.elapsedMilliseconds}ms '
           '(total ${timing.elapsedMilliseconds}ms)',
     );
+    await _deleteRuntimeConfig(_xrayConfigFile);
     if (_usesSingBoxTun) {
       final tunWait = Stopwatch()..start();
       _log('info', 'Connection timing: sing-box TUN startup requested');
@@ -556,9 +561,18 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         'Connection timing: TUN ready ${tunWait.elapsedMilliseconds}ms '
             '(total ${timing.elapsedMilliseconds}ms)',
       );
+      await _deleteRuntimeConfig(_tunConfigFile);
     }
     if (_systemProxyEnabled) {
       await _host.enableSystemProxy(_localHttpPort);
+    }
+  }
+
+  Future<void> _deleteRuntimeConfig(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } on Object {
+      _log('warning', 'Could not remove a temporary Core configuration');
     }
   }
 
@@ -1824,7 +1838,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> _loadSubscriptionCache() async {
     if (!await _subscriptionFile.exists()) return;
     try {
-      final payload = jsonDecode(await _subscriptionFile.readAsString());
+      final stored = jsonDecode(await _subscriptionFile.readAsString());
+      final protected = stored is Map && stored['format'] == 'dpapi-v1';
+      final payload = protected
+          ? jsonDecode(await _host.unprotectData('${stored['payload'] ?? ''}'))
+          : stored;
       if (payload is! Map) return;
       _servers = (payload['servers'] as List? ?? const [])
           .whereType<Map>()
@@ -1841,6 +1859,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         );
       }
       _lastUpdated = (payload['lastUpdated'] as num?)?.toInt() ?? 0;
+      if (!protected) await _persistSubscriptionCache();
     } on Object {
       _servers = [];
       _log('warning', 'Ignored a damaged subscription cache');
@@ -1857,18 +1876,44 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'openCount': _openCount,
   });
 
-  Future<void> _persistSubscriptionCache() => _writeJson(_subscriptionFile, {
-    'servers': _servers.map((server) => server.toPrivateJson()).toList(),
-    'usage': _usage.toJson(),
-    'lastUpdated': _lastUpdated,
-  });
+  Future<void> _persistSubscriptionCache() async {
+    final plain = jsonEncode({
+      'servers': _servers.map((server) => server.toPrivateJson()).toList(),
+      'usage': _usage.toJson(),
+      'lastUpdated': _lastUpdated,
+    });
+    final protected = await _host.protectData(plain);
+    await _writeJson(_subscriptionFile, {
+      'format': 'dpapi-v1',
+      'payload': protected,
+    });
+  }
 
   Future<void> _writeJson(File target, Object value) async {
     await target.parent.create(recursive: true);
     final temporary = File('${target.path}.tmp');
+    final backup = File('${target.path}.bak');
     await temporary.writeAsString(jsonEncode(value), flush: true);
-    if (await target.exists()) await target.delete();
-    await temporary.rename(target.path);
+    if (await backup.exists()) await backup.delete();
+    if (await target.exists()) await target.rename(backup.path);
+    try {
+      await temporary.rename(target.path);
+      if (await backup.exists()) await backup.delete();
+    } on Object {
+      if (!await target.exists() && await backup.exists()) {
+        await backup.rename(target.path);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _recoverAtomicFile(File target) async {
+    final backup = File('${target.path}.bak');
+    if (!await target.exists() && await backup.exists()) {
+      await backup.rename(target.path);
+    } else if (await target.exists() && await backup.exists()) {
+      await backup.delete();
+    }
   }
 
   void _ensureSelection() {

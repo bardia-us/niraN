@@ -15,6 +15,7 @@ void main() {
     late List<String?> ranges;
     var supportRanges = true;
     var corruptPayload = false;
+    String? redirectLocation;
     var requestCount = 0;
 
     setUp(() async {
@@ -23,11 +24,19 @@ void main() {
       ranges = <String?>[];
       supportRanges = true;
       corruptPayload = false;
+      redirectLocation = null;
       requestCount = 0;
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       unawaited(() async {
         await for (final request in server) {
           requestCount++;
+          if (redirectLocation case final location?) {
+            request.response
+              ..statusCode = HttpStatus.found
+              ..headers.set(HttpHeaders.locationHeader, location);
+            await request.response.close();
+            continue;
+          }
           final range = request.headers.value(HttpHeaders.rangeHeader);
           ranges.add(range);
           var start = 0;
@@ -183,6 +192,16 @@ void main() {
       await updater.activeTask;
       expect(requestCount, 1);
       expect(updater.snapshot.status, UpdateDownloadStatus.readyToUpdate);
+    });
+
+    test('unsafe redirect is rejected before contacting its target', () async {
+      redirectLocation = 'http://untrusted.invalid/update.zip';
+      final updater = manager();
+      await updater.start(asset(), SemanticVersion.parse('0.3.3'));
+      await updater.activeTask;
+      expect(updater.snapshot.status, UpdateDownloadStatus.failed);
+      expect(updater.snapshot.error, contains('not trusted'));
+      expect(requestCount, 1);
     });
 
     test(

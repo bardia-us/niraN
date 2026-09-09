@@ -798,6 +798,11 @@ void main() {
           dataDirectory: directory,
         );
         await first.initialize();
+        final protectedCache = await File(
+          '${directory.path}\\subscription-cache.json',
+        ).readAsString();
+        expect(protectedCache, contains('dpapi-v1'));
+        expect(protectedCache, isNot(contains(records.first.credential)));
         await first.reorderServers(const ['c', 'a', 'b']);
         await first.reorderServers(const ['c', 'b', 'a']);
 
@@ -1647,6 +1652,14 @@ final class _FakeWindowsHost implements WindowsNativeHostApi {
 
   @override
   Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo() async => const {};
+
+  @override
+  Future<String> protectData(String value) async =>
+      base64Encode(utf8.encode(value));
+
+  @override
+  Future<String> unprotectData(String value) async =>
+      utf8.decode(base64Decode(value));
 
   @override
   Future<void> exitApplication() async {}

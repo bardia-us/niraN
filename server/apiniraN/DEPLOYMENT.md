@@ -20,11 +20,20 @@ Optional server-side environment variables:
   served only to allowed Android/niraNG devices.
 - `NIRAN_WINDOWS_SUBSCRIPTION_UPSTREAM`: private HTTPS subscription endpoint
   served only to allowed Windows/niraN devices.
+- `NIRAN_SUBSCRIPTION_HMAC_SECRET`: a random server-to-server secret of at
+  least 32 characters. Configure the exact same value on the niraN API host
+  and the `my-sub` host before enabling «افزایش امنیت» for a subscription.
 - `NIRANG_SUBSCRIPTION_UPSTREAM`: optional legacy fallback if a
   platform-specific variable is absent. Prefer the two variables above.
 
 All upstream URLs are server-only secrets. Never commit them or embed them in
 an APK or Windows executable.
+
+Enhanced-security subscriptions are opt-in. Ordinary subscriptions remain
+compatible with v2rayN, v2rayNG, V2Box, and other clients. When enabled for a
+specific `my-sub` record, its direct URL rejects public requests and accepts
+only short-lived, path-bound HMAC requests from this API. Missing or invalid
+server configuration fails closed.
 
 The web server user needs read/write access only to the database directory.
 Keep HTTPS enabled for both endpoints; the client only posts to `api.php`.

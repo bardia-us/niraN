@@ -100,7 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.3',
+          appVersion: app?.appVersion ?? '0.3.4',
         );
       }),
     );

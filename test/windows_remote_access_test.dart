@@ -21,11 +21,13 @@ void main() {
     final secondTransport = _RegistryTransport();
     final first = WindowsRemoteAccessService(
       infoProvider: const _InfoProvider(),
+      dataProtector: const _TestDataProtector(),
       transport: firstTransport,
       dataDirectory: firstDirectory,
     );
     final second = WindowsRemoteAccessService(
       infoProvider: const _InfoProvider(),
+      dataProtector: const _TestDataProtector(),
       transport: secondTransport,
       dataDirectory: secondDirectory,
     );
@@ -52,7 +54,9 @@ void main() {
     final local = await File(
       '${firstDirectory.path}${Platform.pathSeparator}device-registration.json',
     ).readAsString();
+    expect(local, contains('dpapi-v1'));
     expect(local, isNot(contains(_InfoProvider.rawSystemId)));
+    expect(local, isNot(contains(_RegistryTransport.token)));
   });
 
   test('subscription access is authenticated and block persists', () async {
@@ -63,6 +67,7 @@ void main() {
     final transport = _RegistryTransport();
     final service = WindowsRemoteAccessService(
       infoProvider: const _InfoProvider(),
+      dataProtector: const _TestDataProtector(),
       transport: transport,
       dataDirectory: directory,
     );
@@ -88,6 +93,7 @@ void main() {
     final callsAfterBlock = transport.payloads.length;
     final restarted = WindowsRemoteAccessService(
       infoProvider: const _InfoProvider(),
+      dataProtector: const _TestDataProtector(),
       transport: transport,
       dataDirectory: directory,
     );
@@ -113,6 +119,7 @@ void main() {
       final transport = _RegistryTransport();
       final oldService = WindowsRemoteAccessService(
         infoProvider: const _InfoProvider(),
+        dataProtector: const _TestDataProtector(),
         transport: transport,
         dataDirectory: directory,
       );
@@ -121,6 +128,7 @@ void main() {
 
       final upgraded = WindowsRemoteAccessService(
         infoProvider: const _InfoProvider(appVersion: '0.3.3+6'),
+        dataProtector: const _TestDataProtector(),
         transport: transport,
         dataDirectory: directory,
       );
@@ -134,6 +142,18 @@ void main() {
       expect(transport.payloads.last['app_version'], '0.3.3+6');
     },
   );
+}
+
+final class _TestDataProtector implements WindowsDataProtector {
+  const _TestDataProtector();
+
+  @override
+  Future<String> protect(String value) async =>
+      base64Encode(utf8.encode(value));
+
+  @override
+  Future<String> unprotect(String value) async =>
+      utf8.decode(base64Decode(value));
 }
 
 final class _InfoProvider implements DeviceRegistrationInfoProvider {

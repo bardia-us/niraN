@@ -8,6 +8,7 @@
 #include <flutter/standard_method_codec.h>
 #include <shellapi.h>
 #include <windows.h>
+#include <wincrypt.h>
 #include <security.h>
 #include <winrt/Windows.Security.Cryptography.h>
 #include <winrt/Windows.System.Profile.h>
@@ -204,6 +205,83 @@ bool IsProcessElevated() {
       token, TokenElevation, &elevation, sizeof(elevation), &size);
   CloseHandle(token);
   return queried && elevation.TokenIsElevated != 0;
+}
+
+std::string ProtectForCurrentUser(const std::string& value,
+                                  std::wstring* error) {
+  if (value.empty()) {
+    if (error != nullptr) *error = L"Protected data must not be empty";
+    return {};
+  }
+  constexpr char kEntropy[] = "niraN.windows.secure-storage.v1";
+  DATA_BLOB input{
+      static_cast<DWORD>(value.size()),
+      reinterpret_cast<BYTE*>(const_cast<char*>(value.data()))};
+  DATA_BLOB entropy{
+      static_cast<DWORD>(sizeof(kEntropy) - 1),
+      reinterpret_cast<BYTE*>(const_cast<char*>(kEntropy))};
+  DATA_BLOB output{};
+  if (!CryptProtectData(&input, L"niraN protected data", &entropy, nullptr,
+                        nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+    if (error != nullptr) *error = L"Windows data protection failed";
+    return {};
+  }
+  DWORD encoded_size = 0;
+  if (!CryptBinaryToStringA(output.pbData, output.cbData,
+                            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr,
+                            &encoded_size)) {
+    LocalFree(output.pbData);
+    if (error != nullptr) *error = L"Encoding protected data failed";
+    return {};
+  }
+  std::string encoded(encoded_size, '\0');
+  const BOOL encoded_ok = CryptBinaryToStringA(
+      output.pbData, output.cbData,
+      CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded.data(),
+      &encoded_size);
+  LocalFree(output.pbData);
+  if (!encoded_ok) {
+    if (error != nullptr) *error = L"Encoding protected data failed";
+    return {};
+  }
+  while (!encoded.empty() && encoded.back() == '\0') encoded.pop_back();
+  return encoded;
+}
+
+std::string UnprotectForCurrentUser(const std::string& value,
+                                    std::wstring* error) {
+  if (value.empty()) {
+    if (error != nullptr) *error = L"Protected data must not be empty";
+    return {};
+  }
+  DWORD decoded_size = 0;
+  if (!CryptStringToBinaryA(value.c_str(), static_cast<DWORD>(value.size()),
+                            CRYPT_STRING_BASE64, nullptr, &decoded_size,
+                            nullptr, nullptr)) {
+    if (error != nullptr) *error = L"Protected data is malformed";
+    return {};
+  }
+  std::vector<BYTE> decoded(decoded_size);
+  if (!CryptStringToBinaryA(value.c_str(), static_cast<DWORD>(value.size()),
+                            CRYPT_STRING_BASE64, decoded.data(), &decoded_size,
+                            nullptr, nullptr)) {
+    if (error != nullptr) *error = L"Protected data is malformed";
+    return {};
+  }
+  constexpr char kEntropy[] = "niraN.windows.secure-storage.v1";
+  DATA_BLOB input{decoded_size, decoded.data()};
+  DATA_BLOB entropy{
+      static_cast<DWORD>(sizeof(kEntropy) - 1),
+      reinterpret_cast<BYTE*>(const_cast<char*>(kEntropy))};
+  DATA_BLOB output{};
+  if (!CryptUnprotectData(&input, nullptr, &entropy, nullptr, nullptr,
+                          CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+    if (error != nullptr) *error = L"Windows data could not be decrypted";
+    return {};
+  }
+  std::string plain(reinterpret_cast<char*>(output.pbData), output.cbData);
+  LocalFree(output.pbData);
+  return plain;
 }
 
 std::wstring RegistryString(HKEY root, const wchar_t* path,
@@ -450,6 +528,28 @@ void WindowsBackendBridge::HandleMethodCall(
     values[flutter::EncodableValue("systemIdSource")] =
         flutter::EncodableValue(system_id_source);
     result->Success(flutter::EncodableValue(values));
+    return;
+  }
+  if (method == "protectData") {
+    std::wstring error;
+    const std::string protected_value =
+        ProtectForCurrentUser(StringArgument(call, "value"), &error);
+    if (protected_value.empty()) {
+      result->Error("data_protection", Utf8(error));
+    } else {
+      result->Success(flutter::EncodableValue(protected_value));
+    }
+    return;
+  }
+  if (method == "unprotectData") {
+    std::wstring error;
+    const std::string plain =
+        UnprotectForCurrentUser(StringArgument(call, "value"), &error);
+    if (plain.empty()) {
+      result->Error("data_protection", Utf8(error));
+    } else {
+      result->Success(flutter::EncodableValue(plain));
+    }
     return;
   }
   if (method == "exitApplication") {

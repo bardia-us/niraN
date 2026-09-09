@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import '../../core/registration/device_registration.dart';
 import 'windows_device_registration.dart';
+import 'windows_native_host.dart';
 
 const _schemaVersion = 5;
 const _consentVersion = 3;
@@ -12,7 +13,26 @@ const _endpoint = 'https://neovip.ir/apiniraN/api.php';
 
 final windowsRemoteAccess = WindowsRemoteAccessService(
   infoProvider: WindowsDeviceRegistrationInfoProvider(),
+  dataProtector: NativeWindowsDataProtector(),
 );
+
+abstract interface class WindowsDataProtector {
+  Future<String> protect(String value);
+  Future<String> unprotect(String value);
+}
+
+final class NativeWindowsDataProtector implements WindowsDataProtector {
+  NativeWindowsDataProtector({WindowsNativeHostApi? host})
+    : _host = host ?? MethodChannelWindowsNativeHost();
+
+  final WindowsNativeHostApi _host;
+
+  @override
+  Future<String> protect(String value) => _host.protectData(value);
+
+  @override
+  Future<String> unprotect(String value) => _host.unprotectData(value);
+}
 
 final class RegistryResponse {
   const RegistryResponse({
@@ -65,7 +85,7 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
         ..followRedirects = false
         ..headers.contentType = ContentType.json
         ..headers.set(HttpHeaders.acceptHeader, 'application/json, text/plain')
-        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.3');
+        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.4');
       if (token != null) {
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       }
@@ -106,17 +126,20 @@ final class WindowsRemoteAccessService
     implements DeviceRegistrationCoordinator, RemoteAccessController {
   WindowsRemoteAccessService({
     required DeviceRegistrationInfoProvider infoProvider,
+    required WindowsDataProtector dataProtector,
     WindowsRegistryTransport? transport,
     Directory? dataDirectory,
     DateTime Function()? clock,
     Random? random,
   }) : _infoProvider = infoProvider,
+       _dataProtector = dataProtector,
        _transport = transport ?? HttpsWindowsRegistryTransport(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _clock = clock ?? DateTime.now,
        _random = random ?? Random.secure();
 
   final DeviceRegistrationInfoProvider _infoProvider;
+  final WindowsDataProtector _dataProtector;
   final WindowsRegistryTransport _transport;
   final Directory _dataDirectory;
   final DateTime Function() _clock;
@@ -283,7 +306,7 @@ final class WindowsRemoteAccessService
       'device_name': _clean(info.deviceName, 'Windows PC'),
       'windows_username': _clean(info.windowsUsername, 'Unknown user'),
       'windows_version': _clean(info.windowsVersion, 'Windows'),
-      'app_version': _clean(info.appVersion, '0.3.3'),
+      'app_version': _clean(info.appVersion, '0.3.4'),
       'last_seen': _now(),
     };
     _record = updated;
@@ -308,7 +331,7 @@ final class WindowsRemoteAccessService
     final current = _record;
     if (current == null) return;
     final info = await _infoProvider.read();
-    final version = _clean(info.appVersion, '0.3.3');
+    final version = _clean(info.appVersion, '0.3.4');
     if (current['app_version'] == version) return;
     _record = {...current, 'app_version': version};
     await _persist();
@@ -390,11 +413,24 @@ final class WindowsRemoteAccessService
   Future<void> _load() async {
     if (_loaded) return;
     _loaded = true;
+    final backup = File('${_file.path}.bak');
+    if (!await _file.exists() && await backup.exists()) {
+      await backup.rename(_file.path);
+    } else if (await _file.exists() && await backup.exists()) {
+      await backup.delete();
+    }
     if (!await _file.exists()) return;
     try {
-      final decoded = jsonDecode(await _file.readAsString());
+      final stored = jsonDecode(await _file.readAsString());
+      final protected = stored is Map && stored['format'] == 'dpapi-v1';
+      final decoded = protected
+          ? jsonDecode(
+              await _dataProtector.unprotect('${stored['payload'] ?? ''}'),
+            )
+          : stored;
       if (decoded is Map) {
         _record = decoded.map((key, value) => MapEntry('$key', value));
+        if (!protected) await _persist();
       }
     } on Object {
       _record = null;
@@ -405,9 +441,23 @@ final class WindowsRemoteAccessService
     if (_record == null) return;
     await _dataDirectory.create(recursive: true);
     final temporary = File('${_file.path}.tmp');
-    await temporary.writeAsString(jsonEncode(_record), flush: true);
-    if (await _file.exists()) await _file.delete();
-    await temporary.rename(_file.path);
+    final backup = File('${_file.path}.bak');
+    final protected = await _dataProtector.protect(jsonEncode(_record));
+    await temporary.writeAsString(
+      jsonEncode({'format': 'dpapi-v1', 'payload': protected}),
+      flush: true,
+    );
+    if (await backup.exists()) await backup.delete();
+    if (await _file.exists()) await _file.rename(backup.path);
+    try {
+      await temporary.rename(_file.path);
+      if (await backup.exists()) await backup.delete();
+    } on Object {
+      if (!await _file.exists() && await backup.exists()) {
+        await backup.rename(_file.path);
+      }
+      rethrow;
+    }
   }
 
   String _uuidV4() {

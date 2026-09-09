@@ -78,6 +78,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
     'release-assets.githubusercontent.com',
   };
   static const _downloadBufferSize = 256 * 1024;
+  static const _maximumRedirects = 5;
   static const _downloadsKnownFolderId =
       '{374DE290-123F-4565-9164-39C4925E467B}';
 
@@ -523,18 +524,12 @@ final class WindowsUpdateManager extends ChangeNotifier {
     var existing = await partial.exists() ? await partial.length() : 0;
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
-    HttpClientRequest? ownedRequest;
     try {
-      final request = await client.getUrl(asset.url);
-      ownedRequest = request;
-      if (generation != _generation) return;
-      _request = request;
-      request.headers.set(HttpHeaders.userAgentHeader, 'niraN-updater/0.3.3');
-      if (existing > 0) {
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existing-');
-      }
-      final response = await request.close().timeout(
-        const Duration(seconds: 30),
+      final response = await _openDownloadResponse(
+        client,
+        asset.url,
+        existing: existing,
+        generation: generation,
       );
       if (generation != _generation) return;
       if (existing > 0 && response.statusCode == HttpStatus.partialContent) {
@@ -632,10 +627,62 @@ final class WindowsUpdateManager extends ChangeNotifier {
         notifyListeners();
       }
     } finally {
-      if (identical(_request, ownedRequest)) _request = null;
+      _request = null;
       client.close(force: true);
     }
   }
+
+  Future<HttpClientResponse> _openDownloadResponse(
+    HttpClient client,
+    Uri initial, {
+    required int existing,
+    required int generation,
+  }) async {
+    var current = initial;
+    for (var redirect = 0; redirect <= _maximumRedirects; redirect++) {
+      if (!_safeUri(current)) {
+        throw const FormatException('Update redirect is not trusted');
+      }
+      final request = await client.getUrl(current);
+      if (generation != _generation) {
+        request.abort();
+        throw const HttpException('Update download was cancelled');
+      }
+      _request = request;
+      request
+        ..followRedirects = false
+        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-updater/0.3.4');
+      if (existing > 0) {
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existing-');
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      if (!_redirectStatuses.contains(response.statusCode)) return response;
+      if (redirect == _maximumRedirects) {
+        throw const HttpException('Too many update redirects');
+      }
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      if (location == null || location.trim().isEmpty) {
+        throw const HttpException('Update redirect has no destination');
+      }
+      final next = current.resolve(location.trim());
+      if (!_safeUri(next)) {
+        throw const FormatException('Update redirect is not trusted');
+      }
+      await response.drain<void>();
+      current = next;
+    }
+    throw const HttpException('Too many update redirects');
+  }
+
+  static const _redirectStatuses = {
+    HttpStatus.movedPermanently,
+    HttpStatus.found,
+    HttpStatus.seeOther,
+    HttpStatus.temporaryRedirect,
+    HttpStatus.permanentRedirect,
+  };
 
   void _progress(int received, int total, int generation) {
     if (generation != _generation) return;
@@ -665,12 +712,15 @@ final class WindowsUpdateManager extends ChangeNotifier {
     }
   }
 
-  bool _safeAsset(Uri url, String name) =>
+  bool _safeUri(Uri url) =>
       (_allowHttp ? const {'http', 'https'} : const {'https'}).contains(
         url.scheme,
       ) &&
-      _allowedHosts.contains(url.host) &&
-      isSupportedWindowsAssetName(name);
+      url.userInfo.isEmpty &&
+      _allowedHosts.contains(url.host.toLowerCase());
+
+  bool _safeAsset(Uri url, String name) =>
+      _safeUri(url) && isSupportedWindowsAssetName(name);
 
   Future<Directory> _directory() async {
     final existing = _resolvedDirectory;

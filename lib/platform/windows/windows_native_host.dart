@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 abstract interface class WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getBuildConfig();
   Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo();
+  Future<String> protectData(String value);
+  Future<String> unprotectData(String value);
   Future<void> exitApplication();
   Future<void> validateTunPrerequisites();
   Future<void> validateTunFrontendPrerequisites();
@@ -54,6 +56,18 @@ final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
         'getDeviceRegistrationInfo',
       )) ??
       {};
+
+  @override
+  Future<String> protectData(String value) async =>
+      (await _channel.invokeMethod<String>('protectData', {'value': value})) ??
+      (throw const FormatException('Windows data protection failed'));
+
+  @override
+  Future<String> unprotectData(String value) async =>
+      (await _channel.invokeMethod<String>('unprotectData', {
+        'value': value,
+      })) ??
+      (throw const FormatException('Windows data protection failed'));
 
   @override
   Future<void> exitApplication() => _channel.invokeMethod('exitApplication');
