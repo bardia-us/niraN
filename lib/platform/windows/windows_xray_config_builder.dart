@@ -240,10 +240,7 @@ final class WindowsXrayConfigBuilder {
     return <String, Object?>{
       'enabled': sniffingEnabled || fakeDns,
       'destOverride': overrides,
-      'routeOnly':
-          sniffingEnabled &&
-          (_bool(settings, 'routeOnly', false) ||
-              settings['routingMode'] == 'bypassIran'),
+      'routeOnly': sniffingEnabled && _bool(settings, 'routeOnly', false),
     };
   }
 

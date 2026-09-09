@@ -374,6 +374,34 @@ void main() {
       ),
       isTrue,
     );
+    expect(
+      (bypass['inbounds'] as List).every(
+        (inbound) => inbound['sniffing']['routeOnly'] == false,
+      ),
+      isTrue,
+      reason: 'Bypass Iran must respect the user routeOnly setting',
+    );
+
+    final bypassWithRouteOnly =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': 'bypassIran',
+                  'routeOnly': true,
+                },
+                iranCidrs: const ['2.144.0.0/14'],
+              ),
+            )
+            as Map;
+    expect(
+      (bypassWithRouteOnly['inbounds'] as List).every(
+        (inbound) => inbound['sniffing']['routeOnly'] == true,
+      ),
+      isTrue,
+    );
 
     final custom =
         jsonDecode(
