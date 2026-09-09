@@ -7,7 +7,9 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'portable_update_script.dart';
+import 'setup_update_script.dart';
 import 'update_checker.dart';
+import 'windows_installation.dart';
 
 enum UpdateDownloadStatus {
   idle,
@@ -55,9 +57,12 @@ final class WindowsUpdateManager extends ChangeNotifier {
     Directory? directory,
     Set<String>? allowedHosts,
     bool allowHttp = false,
+    WindowsInstallationProbe? installationProbe,
   }) : _directoryOverride = directory,
        _allowedHosts = allowedHosts ?? _productionHosts,
-       _allowHttp = allowHttp;
+       _allowHttp = allowHttp,
+       _installationProbe =
+           installationProbe ?? NativeWindowsInstallationProbe();
 
   static final instance = WindowsUpdateManager._();
 
@@ -65,10 +70,12 @@ final class WindowsUpdateManager extends ChangeNotifier {
   factory WindowsUpdateManager.forTesting({
     required Directory directory,
     Set<String> allowedHosts = const {'127.0.0.1', 'localhost'},
+    WindowsInstallationType installationType = WindowsInstallationType.portable,
   }) => WindowsUpdateManager._(
     directory: directory,
     allowedHosts: allowedHosts,
     allowHttp: true,
+    installationProbe: FixedWindowsInstallationProbe(installationType),
   );
 
   static const _productionHosts = {
@@ -83,10 +90,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
       '{374DE290-123F-4565-9164-39C4925E467B}';
 
   static bool isSupportedWindowsAssetName(String name) =>
-      RegExp(
-        r'^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64\.(zip|exe|msix)$',
-        caseSensitive: false,
-      ).hasMatch(name) &&
+      ReleaseAsset.packageFromName(name) != null &&
       !name.contains(RegExp(r'[\\/]'));
 
   UpdateDownloadSnapshot snapshot = const UpdateDownloadSnapshot();
@@ -97,6 +101,8 @@ final class WindowsUpdateManager extends ChangeNotifier {
   final Directory? _directoryOverride;
   final Set<String> _allowedHosts;
   final bool _allowHttp;
+  final WindowsInstallationProbe _installationProbe;
+  WindowsInstallationType? _installationType;
   int _generation = 0;
   int _focusRequest = 0;
   bool _launching = false;
@@ -108,6 +114,18 @@ final class WindowsUpdateManager extends ChangeNotifier {
       snapshot.status == UpdateDownloadStatus.verifying;
 
   int get focusRequest => _focusRequest;
+
+  Future<WindowsInstallationType> get installationType async =>
+      _installationType ??= await _installationProbe.detect();
+
+  Future<ReleaseAsset?> assetFor(ReleaseCheckResult release) async {
+    final type = await installationType;
+    return release.assetFor(
+      type == WindowsInstallationType.setup
+          ? WindowsUpdatePackage.setupExe
+          : WindowsUpdatePackage.portableZip,
+    );
+  }
 
   void requestManagerFocus() {
     _focusRequest++;
@@ -152,6 +170,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
             received: (data['total'] as num?)?.toInt() ?? 0,
             total: (data['total'] as num?)?.toInt() ?? 0,
           );
+          await _cleanupCompletedArtifacts(directory);
           notifyListeners();
           return;
         }
@@ -163,12 +182,18 @@ final class WindowsUpdateManager extends ChangeNotifier {
       if (!_safeAsset(url, name)) {
         throw const FormatException('Unsafe update metadata');
       }
-      _asset = ReleaseAsset(
+      final restoredAsset = ReleaseAsset(
         name: name,
         url: url,
         size: (data['total'] as num?)?.toInt() ?? 0,
         sha256: data['sha256']?.toString(),
       );
+      if (!await _assetMatchesInstallation(restoredAsset)) {
+        throw const FormatException(
+          'Stored update does not match this installation type',
+        );
+      }
+      _asset = restoredAsset;
       final complete = _completeFile(directory, name);
       final partial = _partialFile(directory, name);
       final completeExists = await complete.exists();
@@ -201,6 +226,12 @@ final class WindowsUpdateManager extends ChangeNotifier {
   Future<void> start(ReleaseAsset asset, SemanticVersion version) async {
     if (!_safeAsset(asset.url, asset.name)) {
       throw const FormatException('Unsafe update asset');
+    }
+    if (asset.version?.compareTo(version) != 0 ||
+        !await _assetMatchesInstallation(asset)) {
+      throw const FormatException(
+        'Update package does not match this installation',
+      );
     }
     if (asset.size <= 0 || asset.sha256 == null) {
       throw const FormatException(
@@ -247,6 +278,8 @@ final class WindowsUpdateManager extends ChangeNotifier {
     SemanticVersion version,
   ) async {
     if (!_safeAsset(asset.url, asset.name) ||
+        asset.version?.compareTo(version) != 0 ||
+        !await _assetMatchesInstallation(asset) ||
         asset.size <= 0 ||
         asset.sha256 == null ||
         snapshot.version != '$version' ||
@@ -356,8 +389,8 @@ final class WindowsUpdateManager extends ChangeNotifier {
     }
   }
 
-  /// Returns true when the portable ZIP updater was started and niraN must
-  /// exit so its files can be replaced safely.
+  /// Returns true when the matching update helper was started and niraN must
+  /// exit so the portable bundle or setup installation can be upgraded.
   Future<bool> launch() async {
     if (_launching) throw StateError('Update is already starting');
     _launching = true;
@@ -404,14 +437,51 @@ final class WindowsUpdateManager extends ChangeNotifier {
         'Stored update failed size/SHA-256 verification',
       );
     }
+    if (!await _assetMatchesInstallation(asset)) {
+      throw const FormatException(
+        'Stored update does not match this installation type',
+      );
+    }
     final ext = snapshot.fileName.toLowerCase();
     if (ext.endsWith('.exe')) {
-      await Process.start(
-        complete.path,
-        const [],
-        mode: ProcessStartMode.detached,
+      final plan = SetupUpdatePlan(
+        processId: pid,
+        installerPath: complete.path,
+        installDirectory: File(Platform.resolvedExecutable).parent.path,
+        workDirectory: directory.path,
+        version: snapshot.version,
       );
-      return false;
+      final script = File(plan.scriptPath);
+      await script.writeAsString(plan.buildScript(), flush: true);
+      final helperResult = _resultFile(directory);
+      if (await helperResult.exists()) await helperResult.delete();
+      snapshot = UpdateDownloadSnapshot(
+        status: UpdateDownloadStatus.closingApp,
+        version: snapshot.version,
+        fileName: snapshot.fileName,
+        received: snapshot.received,
+        total: snapshot.total,
+      );
+      await _persist(directory);
+      notifyListeners();
+      final helper = await _startUpdateHelper(script, directory);
+      final helperError = StringBuffer();
+      unawaited(helper.stdout.drain<void>());
+      helper.stderr.transform(utf8.decoder).listen(helperError.write);
+      final launchError = await _waitForHelperStartup(
+        directory,
+        snapshot.version,
+        helper,
+        helperError,
+      );
+      if (launchError != null) {
+        await _recordLaunchFailure(directory, launchError);
+        throw StateError(
+          '$launchError '
+          'The app was kept open and the verified setup was preserved.',
+        );
+      }
+      return true;
     }
     if (ext.endsWith('.zip')) {
       final plan = PortableUpdatePlan(
@@ -439,7 +509,31 @@ final class WindowsUpdateManager extends ChangeNotifier {
       );
       await _persist(directory);
       notifyListeners();
-      final helper = await Process.start(
+      final helper = await _startUpdateHelper(script, directory);
+      unawaited(helper.stdout.drain<void>());
+      final helperError = StringBuffer();
+      helper.stderr.transform(utf8.decoder).listen(helperError.write);
+      final launchError = await _waitForHelperStartup(
+        directory,
+        snapshot.version,
+        helper,
+        helperError,
+      );
+      if (launchError != null) {
+        await _recordLaunchFailure(directory, launchError);
+        throw StateError(
+          '$launchError '
+          'The app was kept open and the downloaded ZIP was preserved.',
+        );
+      }
+      return true;
+    }
+    await openFolder();
+    return false;
+  }
+
+  Future<Process> _startUpdateHelper(File script, Directory directory) =>
+      Process.start(
         'powershell.exe',
         [
           '-NoLogo',
@@ -452,41 +546,26 @@ final class WindowsUpdateManager extends ChangeNotifier {
           '-File',
           script.path,
         ],
-        // Keep the process observable until it confirms startup. On some
-        // Windows systems a detached console child can exit before executing
-        // the script when its parent is a GUI process.
+        // Keep the helper observable until it confirms startup. The app exits
+        // only after this handshake, so a failed helper cannot strand users.
         mode: ProcessStartMode.normal,
         workingDirectory: directory.path,
       );
-      unawaited(helper.stdout.drain<void>());
-      final helperError = StringBuffer();
-      helper.stderr.transform(utf8.decoder).listen(helperError.write);
-      final launchError = await _waitForHelperStartup(
-        directory,
-        snapshot.version,
-        helper,
-        helperError,
-      );
-      if (launchError != null) {
-        snapshot = UpdateDownloadSnapshot(
-          status: UpdateDownloadStatus.updateFailed,
-          version: snapshot.version,
-          fileName: snapshot.fileName,
-          received: snapshot.received,
-          total: snapshot.total,
-          error: launchError,
-        );
-        await _persist(directory);
-        notifyListeners();
-        throw StateError(
-          '$launchError '
-          'The app was kept open and the downloaded ZIP was preserved.',
-        );
-      }
-      return true;
-    }
-    await openFolder();
-    return false;
+
+  Future<void> _recordLaunchFailure(
+    Directory directory,
+    String launchError,
+  ) async {
+    snapshot = UpdateDownloadSnapshot(
+      status: UpdateDownloadStatus.updateFailed,
+      version: snapshot.version,
+      fileName: snapshot.fileName,
+      received: snapshot.received,
+      total: snapshot.total,
+      error: launchError,
+    );
+    await _persist(directory);
+    notifyListeners();
   }
 
   Future<String?> _waitForHelperStartup(
@@ -503,19 +582,19 @@ final class WindowsUpdateManager extends ChangeNotifier {
       if (result != null) {
         if (result.state == 'closingApp') return null;
         return result.message.isEmpty
-            ? 'The portable update helper reported ${result.state}.'
+            ? 'The update helper reported ${result.state}.'
             : result.message;
       }
       if (exitCode != null) {
         final detail = helperError.toString().trim();
         return detail.isEmpty
-            ? 'The portable update helper exited with code $exitCode.'
-            : 'The portable update helper exited with code $exitCode: $detail';
+            ? 'The update helper exited with code $exitCode.'
+            : 'The update helper exited with code $exitCode: $detail';
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
     helper.kill();
-    return 'The portable update helper did not confirm startup within 5 seconds.';
+    return 'The update helper did not confirm startup within 5 seconds.';
   }
 
   Future<void> _download(int generation, Directory directory) async {
@@ -589,6 +668,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
       await _persist(directory);
       notifyListeners();
       if (length != asset.size) {
+        await partial.delete();
         throw const FormatException(
           'Downloaded file size does not match release asset',
         );
@@ -596,6 +676,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
       final digest = (await sha256.bind(partial.openRead()).first).toString();
       if (generation != _generation) return;
       if (digest.toLowerCase() != asset.sha256!.toLowerCase()) {
+        await partial.delete();
         throw const FormatException(
           'Downloaded file SHA-256 verification failed',
         );
@@ -722,6 +803,13 @@ final class WindowsUpdateManager extends ChangeNotifier {
   bool _safeAsset(Uri url, String name) =>
       _safeUri(url) && isSupportedWindowsAssetName(name);
 
+  Future<bool> _assetMatchesInstallation(ReleaseAsset asset) async {
+    final expected = await installationType == WindowsInstallationType.setup
+        ? WindowsUpdatePackage.setupExe
+        : WindowsUpdatePackage.portableZip;
+    return asset.package == expected;
+  }
+
   Future<Directory> _directory() async {
     final existing = _resolvedDirectory;
     if (existing != null) return existing;
@@ -791,6 +879,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
         'total': asset.size,
         'sha256': asset.sha256,
         'status': snapshot.status.name,
+        'installationType': (await installationType).name,
       }),
       flush: true,
     );
@@ -824,12 +913,28 @@ final class WindowsUpdateManager extends ChangeNotifier {
     }
   }
 
+  Future<void> _cleanupCompletedArtifacts(Directory directory) async {
+    for (final file in [
+      _stateFile(directory),
+      _resultFile(directory),
+      File('${directory.path}${Platform.pathSeparator}update-helper.log'),
+    ]) {
+      try {
+        if (await file.exists()) await file.delete();
+      } on Object {
+        // A short-lived helper lock is harmless and retried on next startup.
+      }
+    }
+  }
+
   bool _isUpdaterOwned(String path) {
     final name = path.split(Platform.pathSeparator).last;
     if (name == '.niran-update.json' ||
         name == 'update-result.json' ||
         name == 'update-helper.log' ||
-        RegExp(r'^install-update-\d+\.\d+\.\d+\.ps1$').hasMatch(name)) {
+        RegExp(
+          r'^install-(?:setup-)?update-\d+\.\d+\.\d+\.ps1$',
+        ).hasMatch(name)) {
       return true;
     }
     final base = name.endsWith('.part')

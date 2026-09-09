@@ -33,9 +33,17 @@ void main() {
     );
     expect(
       WindowsUpdateManager.isSupportedWindowsAssetName(
-        'niraN-v0.3.2-windows-x64.exe',
+        'niraN-v0.3.2-windows-x64-setup.exe',
       ),
       isTrue,
+    );
+    expect(
+      ReleaseAsset(
+        name: 'niraN-v0.3.4-windows-x64-setup.exe',
+        url: Uri.parse('https://github.com/example'),
+        size: 1,
+      ).version.toString(),
+      '0.3.4',
     );
     expect(
       WindowsUpdateManager.isSupportedWindowsAssetName('../niraN.exe'),

@@ -43,14 +43,23 @@ class ReleaseCheckResult {
     required this.latestVersion,
     required this.releaseUrl,
     required this.updateAvailable,
-    this.windowsAsset,
+    this.portableAsset,
+    this.setupAsset,
   });
 
   final SemanticVersion latestVersion;
   final Uri releaseUrl;
   final bool updateAvailable;
-  final ReleaseAsset? windowsAsset;
+  final ReleaseAsset? portableAsset;
+  final ReleaseAsset? setupAsset;
+
+  ReleaseAsset? assetFor(WindowsUpdatePackage package) => switch (package) {
+    WindowsUpdatePackage.portableZip => portableAsset,
+    WindowsUpdatePackage.setupExe => setupAsset,
+  };
 }
+
+enum WindowsUpdatePackage { portableZip, setupExe }
 
 class ReleaseAsset {
   const ReleaseAsset({
@@ -63,6 +72,33 @@ class ReleaseAsset {
   final Uri url;
   final int size;
   final String? sha256;
+
+  WindowsUpdatePackage? get package => packageFromName(name);
+
+  SemanticVersion? get version {
+    final match = RegExp(
+      r'^niraN-(?:v)?(\d+\.\d+\.\d+)-windows-x64(?:-setup)?\.(?:zip|exe)$',
+      caseSensitive: false,
+    ).firstMatch(name);
+    if (match == null) return null;
+    return SemanticVersion.parse(match.group(1)!);
+  }
+
+  static WindowsUpdatePackage? packageFromName(String name) {
+    if (RegExp(
+      r'^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64\.zip$',
+      caseSensitive: false,
+    ).hasMatch(name)) {
+      return WindowsUpdatePackage.portableZip;
+    }
+    if (RegExp(
+      r'^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64(?:-setup)?\.exe$',
+      caseSensitive: false,
+    ).hasMatch(name)) {
+      return WindowsUpdatePackage.setupExe;
+    }
+    return null;
+  }
 }
 
 class GitHubUpdateChecker {
@@ -98,20 +134,14 @@ class GitHubUpdateChecker {
           !releaseUrl.path.startsWith('/bardia-us/niraN/releases/')) {
         throw const FormatException('Invalid release URL');
       }
-      ReleaseAsset? windowsAsset;
+      ReleaseAsset? portableAsset;
+      ReleaseAsset? setupAsset;
       final assets = payload['assets'];
       if (assets is List) {
-        final candidates = <ReleaseAsset>[];
         for (final value in assets.whereType<Map>()) {
           final name = '${value['name'] ?? ''}';
-          final lower = name.toLowerCase();
-          if (!lower.contains('windows') ||
-              !lower.contains('x64') ||
-              !(lower.endsWith('.zip') ||
-                  lower.endsWith('.exe') ||
-                  lower.endsWith('.msix'))) {
-            continue;
-          }
+          final package = ReleaseAsset.packageFromName(name);
+          if (package == null) continue;
           final url = Uri.tryParse('${value['browser_download_url'] ?? ''}');
           if (url == null ||
               url.scheme != 'https' ||
@@ -125,37 +155,31 @@ class GitHubUpdateChecker {
           final digest = RegExp(
             r'^sha256:([0-9a-fA-F]{64})$',
           ).firstMatch(rawDigest)?.group(1)?.toLowerCase();
-          candidates.add(
-            ReleaseAsset(
-              name: name,
-              url: url,
-              size: (value['size'] as num?)?.toInt() ?? 0,
-              sha256: digest,
-            ),
+          final asset = ReleaseAsset(
+            name: name,
+            url: url,
+            size: (value['size'] as num?)?.toInt() ?? 0,
+            sha256: digest,
           );
+          if (asset.version?.compareTo(latest) != 0) continue;
+          switch (package) {
+            case WindowsUpdatePackage.portableZip:
+              portableAsset ??= asset;
+            case WindowsUpdatePackage.setupExe:
+              setupAsset ??= asset;
+          }
         }
-        candidates.sort(
-          (left, right) =>
-              _assetPriority(left.name).compareTo(_assetPriority(right.name)),
-        );
-        windowsAsset = candidates.firstOrNull;
       }
       return ReleaseCheckResult(
         latestVersion: latest,
         releaseUrl: releaseUrl,
         updateAvailable:
             latest.compareTo(SemanticVersion.parse(currentVersion)) > 0,
-        windowsAsset: windowsAsset,
+        portableAsset: portableAsset,
+        setupAsset: setupAsset,
       );
     } finally {
       client.close(force: true);
     }
-  }
-
-  static int _assetPriority(String name) {
-    final lower = name.toLowerCase();
-    if (lower.endsWith('.zip')) return 0;
-    if (lower.endsWith('.exe')) return 1;
-    return 2;
   }
 }

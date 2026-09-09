@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:niran/core/update_checker.dart';
+import 'package:niran/core/windows_installation.dart';
 import 'package:niran/core/windows_update_manager.dart';
 
 void main() {
@@ -84,6 +85,41 @@ void main() {
 
     WindowsUpdateManager manager() =>
         WindowsUpdateManager.forTesting(directory: directory);
+
+    test('selects only the package matching the installation type', () async {
+      final portable = asset();
+      final setup = ReleaseAsset(
+        name: 'niraN-v0.3.3-windows-x64-setup.exe',
+        url: Uri.parse('http://127.0.0.1:${server.port}/setup.exe'),
+        size: payload.length,
+        sha256: sha256.convert(payload).toString(),
+      );
+      final release = ReleaseCheckResult(
+        latestVersion: SemanticVersion.parse('0.3.3'),
+        releaseUrl: Uri.parse(
+          'https://github.com/bardia-us/niraN/releases/tag/v0.3.3',
+        ),
+        updateAvailable: true,
+        portableAsset: portable,
+        setupAsset: setup,
+      );
+      final portableManager = manager();
+      final setupManager = WindowsUpdateManager.forTesting(
+        directory: directory,
+        installationType: WindowsInstallationType.setup,
+      );
+
+      expect(await portableManager.assetFor(release), same(portable));
+      expect(await setupManager.assetFor(release), same(setup));
+      await expectLater(
+        portableManager.start(setup, release.latestVersion),
+        throwsFormatException,
+      );
+      await expectLater(
+        setupManager.start(portable, release.latestVersion),
+        throwsFormatException,
+      );
+    });
 
     test('pause aborts network and resume continues with Range', () async {
       final updater = manager();
@@ -180,8 +216,39 @@ void main() {
         await File(
           '${directory.path}${Platform.pathSeparator}niraN-0.3.3-windows-x64.zip.part',
         ).exists(),
-        isTrue,
+        isFalse,
       );
+    });
+
+    test('completed update state removes stale helper metadata', () async {
+      final state = File(
+        '${directory.path}${Platform.pathSeparator}.niran-update.json',
+      );
+      final result = File(
+        '${directory.path}${Platform.pathSeparator}update-result.json',
+      );
+      final log = File(
+        '${directory.path}${Platform.pathSeparator}update-helper.log',
+      );
+      await state.writeAsString(
+        jsonEncode({
+          'version': '0.3.3',
+          'fileName': 'niraN-0.3.3-windows-x64.zip',
+          'total': payload.length,
+        }),
+      );
+      await result.writeAsString(
+        jsonEncode({'version': '0.3.3', 'state': 'completed'}),
+      );
+      await log.writeAsString('completed');
+      final updater = manager();
+
+      await updater.initialize('0.3.3');
+
+      expect(updater.snapshot.status, UpdateDownloadStatus.updateCompleted);
+      expect(await state.exists(), isFalse);
+      expect(await result.exists(), isFalse);
+      expect(await log.exists(), isFalse);
     });
 
     test('duplicate start does not create a second network task', () async {

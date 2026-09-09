@@ -907,6 +907,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ).showSnackBar(SnackBar(content: Text(context.s('upToDate'))));
         return;
       }
+      final updateManager = WindowsUpdateManager.instance;
+      final updateAsset = await updateManager.assetFor(release);
+      if (!context.mounted) return;
       final action = await showDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
@@ -919,7 +922,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               child: const Text('Download with browser'),
             ),
             FilledButton(
-              onPressed: release.windowsAsset?.sha256 == null
+              onPressed: updateAsset?.sha256 == null
                   ? null
                   : () => Navigator.pop(dialogContext, 'inside'),
               child: const Text('Download in niraN'),
@@ -927,17 +930,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ],
         ),
       );
-      if (action == 'inside' && release.windowsAsset != null) {
-        await WindowsUpdateManager.instance.start(
-          release.windowsAsset!,
-          release.latestVersion,
-        );
-        WindowsUpdateManager.instance.requestManagerFocus();
+      if (action == 'inside' && updateAsset != null) {
+        await updateManager.start(updateAsset, release.latestVersion);
+        updateManager.requestManagerFocus();
       } else if (action == 'browser' && context.mounted) {
         await _perform(
           context,
           () => controller.openExternalUrl(
-            release.windowsAsset?.url ?? release.releaseUrl,
+            updateAsset?.url ?? release.releaseUrl,
           ),
         );
       }

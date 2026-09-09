@@ -1,6 +1,3 @@
-import 'package:flutter/foundation.dart';
-
-@immutable
 class PortableUpdatePlan {
   const PortableUpdatePlan({
     required this.processId,
@@ -166,7 +163,11 @@ try {
   Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue
 } catch {
   $Failure = $_.Exception.Message
-  try { Restore-Backup } catch {
+  $RollbackSucceeded = $false
+  try {
+    Restore-Backup
+    $RollbackSucceeded = $true
+  } catch {
     $Failure = "$Failure; rollback failed: $($_.Exception.Message)"
   }
   Write-State 'failed' $Failure
@@ -175,6 +176,9 @@ try {
     Start-Process -FilePath $OldExecutable -WorkingDirectory $ActiveFolder -ErrorAction SilentlyContinue | Out-Null
   }
   Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue
+  if ($RollbackSucceeded) {
+    Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
+  }
   exit 1
 } finally {
   if ($MutexOwned) { $Mutex.ReleaseMutex() }

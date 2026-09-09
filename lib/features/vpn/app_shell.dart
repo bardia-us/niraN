@@ -395,10 +395,12 @@ class _AppShellState extends ConsumerState<AppShell> {
       if (release == null) return;
       if (!mounted || !release.updateAvailable) return;
       final updateManager = WindowsUpdateManager.instance;
+      final updateAsset = await updateManager.assetFor(release);
+      if (!mounted) return;
       final downloaded =
-          release.windowsAsset != null &&
+          updateAsset != null &&
           await updateManager.hasVerifiedDownload(
-            release.windowsAsset!,
+            updateAsset,
             release.latestVersion,
           );
       if (!mounted) return;
@@ -425,7 +427,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             FilledButton(
               onPressed: downloaded
                   ? () => Navigator.pop(dialogContext, 'install')
-                  : release.windowsAsset?.sha256 == null
+                  : updateAsset?.sha256 == null
                   ? null
                   : () => Navigator.pop(dialogContext, 'inside'),
               child: Text(downloaded ? context.s('installUpdate') : 'Download'),
@@ -434,8 +436,8 @@ class _AppShellState extends ConsumerState<AppShell> {
         ),
       );
       if (!mounted) return;
-      if (action == 'inside' && release.windowsAsset != null) {
-        await updateManager.start(release.windowsAsset!, release.latestVersion);
+      if (action == 'inside' && updateAsset != null) {
+        await updateManager.start(updateAsset, release.latestVersion);
         if (!mounted) return;
         NirangDiagnostics.currentFeature = 'settings';
         setState(() => _index = 2);
@@ -448,7 +450,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       } else if (action == 'browser') {
         await ref
             .read(appControllerProvider.notifier)
-            .openExternalUrl(release.windowsAsset?.url ?? release.releaseUrl);
+            .openExternalUrl(updateAsset?.url ?? release.releaseUrl);
       }
     } on Object {
       // Startup must remain usable when GitHub is unavailable.
