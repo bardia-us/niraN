@@ -62,7 +62,7 @@ try {
     $database = null;
     $error = 'The registry database is unavailable.';
 }
-$environmentHash = getenv('NIRAN_ADMIN_PASSWORD_HASH');
+$environmentHash = registry_environment('NIRAN_ADMIN_PASSWORD_HASH');
 $passwordHash = is_string($environmentHash) && $environmentHash !== '' ? $environmentHash : ($database instanceof PDO ? stored_admin_hash($database) : null);
 $setupRequired = $database instanceof PDO && $passwordHash === null;
 if ($passwordHash !== null && !is_password_hash($passwordHash)) $error = 'The administrator password hash is invalid.';
@@ -170,7 +170,7 @@ if ($authenticated) {
          ORDER BY i.last_seen DESC LIMIT 1000'
     )->fetchAll();
 }
-$timezoneName = getenv('NIRAN_ADMIN_TIMEZONE');
+$timezoneName = registry_environment('NIRAN_ADMIN_TIMEZONE');
 try { $displayTimezone = new DateTimeZone(is_string($timezoneName) && $timezoneName !== '' ? $timezoneName : 'Asia/Tehran'); }
 catch (Throwable $exception) { $displayTimezone = new DateTimeZone('UTC'); }
 ?>

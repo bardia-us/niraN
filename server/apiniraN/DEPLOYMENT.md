@@ -23,6 +23,8 @@ Optional server-side environment variables:
 - `NIRAN_SUBSCRIPTION_HMAC_SECRET`: a random server-to-server secret of at
   least 32 characters. Configure the exact same value on the niraN API host
   and the `my-sub` host before enabling «افزایش امنیت» for a subscription.
+  On shared cPanel hosting, Apache `SetEnv` values from `.htaccess` are also
+  supported through PHP's `$_SERVER` fallback.
 - `NIRANG_SUBSCRIPTION_UPSTREAM`: optional legacy fallback if a
   platform-specific variable is absent. Prefer the two variables above.
 

@@ -4,9 +4,21 @@ declare(strict_types=1);
 const NIRANG_DEFAULT_MINIMUM_ANDROID_VERSION = '1.1.1';
 const NIRANG_DEFAULT_MINIMUM_WINDOWS_VERSION = '0.3.1';
 
+function registry_environment(string $name): ?string
+{
+    $value = getenv($name);
+    if (is_string($value) && $value !== '') return $value;
+    $serverValue = $_SERVER[$name] ?? null;
+    if (is_string($serverValue) && $serverValue !== '') return $serverValue;
+    $environmentValue = $_ENV[$name] ?? null;
+    return is_string($environmentValue) && $environmentValue !== ''
+        ? $environmentValue
+        : null;
+}
+
 function registry_database(): PDO
 {
-    $configured = getenv('NIRAN_REGISTRY_DB');
+    $configured = registry_environment('NIRAN_REGISTRY_DB');
     $path = is_string($configured) && $configured !== ''
         ? $configured
         : dirname(__DIR__) . DIRECTORY_SEPARATOR . '.niran-private' . DIRECTORY_SEPARATOR . 'device-registry.sqlite';

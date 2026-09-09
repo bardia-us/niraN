@@ -285,16 +285,16 @@ function proxy_subscription(PDO $pdo, array $payload): void
     $environmentKey = $access['platform'] === 'windows'
         ? 'NIRAN_WINDOWS_SUBSCRIPTION_UPSTREAM'
         : 'NIRANG_ANDROID_SUBSCRIPTION_UPSTREAM';
-    $upstream = getenv($environmentKey);
+    $upstream = registry_environment($environmentKey);
     if (!is_string($upstream) || $upstream === '') {
-        $upstream = getenv('NIRANG_SUBSCRIPTION_UPSTREAM');
+        $upstream = registry_environment('NIRANG_SUBSCRIPTION_UPSTREAM');
     }
     if (!is_string($upstream) || preg_match('#^https://#i', $upstream) !== 1 || !function_exists('curl_init')) {
         respond(503, ['ok' => false, 'error' => 'subscription_unavailable']);
     }
     $forwardHeaders = [];
     $requestHeaders = ['Accept: text/plain, application/json', 'Cache-Control: no-cache'];
-    $hmacSecret = getenv('NIRAN_SUBSCRIPTION_HMAC_SECRET');
+    $hmacSecret = registry_environment('NIRAN_SUBSCRIPTION_HMAC_SECRET');
     if (is_string($hmacSecret) && strlen($hmacSecret) >= 32) {
         $requestHeaders = array_merge(
             $requestHeaders,

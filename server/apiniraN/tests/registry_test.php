@@ -10,6 +10,14 @@ function assert_same($expected, $actual, string $message): void
     }
 }
 
+$_SERVER['NIRAN_TEST_CPANEL_ENV'] = 'server-value';
+assert_same(
+    'server-value',
+    registry_environment('NIRAN_TEST_CPANEL_ENV'),
+    'cPanel SetEnv fallback'
+);
+unset($_SERVER['NIRAN_TEST_CPANEL_ENV']);
+
 $temporary = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nirang-registry-' . bin2hex(random_bytes(8)) . '.sqlite';
 putenv('NIRAN_REGISTRY_DB=' . $temporary);
 
