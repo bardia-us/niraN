@@ -114,6 +114,97 @@ trojan://password@two.example:443?security=tls#Two
   });
 
   test(
+    'QUIC blocking is opt-in and maps identically for Normal and TUN Xray',
+    () {
+      final server = parser
+          .parse('vless://id@example.com:443?security=tls&type=ws#Server')
+          .single;
+
+      bool hasQuicBlock(Map root) =>
+          ((root['routing'] as Map)['rules'] as List).whereType<Map>().any(
+            (rule) =>
+                rule['network'] == 'udp' &&
+                rule['port'] == '443' &&
+                rule['outboundTag'] == 'blocked',
+          );
+
+      for (final tunEnabled in const [false, true]) {
+        final allowed =
+            jsonDecode(
+                  builder.build(
+                    server: server,
+                    settings: {...settings, 'tunEnabled': tunEnabled},
+                  ),
+                )
+                as Map;
+        final blocked =
+            jsonDecode(
+                  builder.build(
+                    server: server,
+                    settings: {
+                      ...settings,
+                      'tunEnabled': tunEnabled,
+                      'blockQuic': true,
+                    },
+                  ),
+                )
+                as Map;
+        expect(hasQuicBlock(allowed), isFalse, reason: 'tun=$tunEnabled');
+        expect(hasQuicBlock(blocked), isTrue, reason: 'tun=$tunEnabled');
+      }
+    },
+  );
+
+  test('Mux is configurable only for compatible VLESS and VMess profiles', () {
+    Map muxFor(String link, {int concurrency = 8}) {
+      final server = parser.parse(link).single;
+      final root =
+          jsonDecode(
+                builder.build(
+                  server: server,
+                  settings: {
+                    ...settings,
+                    'muxEnabled': true,
+                    'muxConcurrency': concurrency,
+                  },
+                ),
+              )
+              as Map;
+      return ((root['outbounds'] as List).first as Map)['mux'] as Map;
+    }
+
+    for (final concurrency in const [1, 8, 16, 32]) {
+      expect(
+        muxFor(
+          'vless://id@example.com:443?security=tls&type=ws#VLESS',
+          concurrency: concurrency,
+        ),
+        {'enabled': true, 'concurrency': concurrency},
+      );
+    }
+    expect(
+      muxFor(
+        'vmess://${base64Url.encode(utf8.encode(jsonEncode({'v': '2', 'ps': 'VMess', 'add': 'example.com', 'port': '443', 'id': '00000000-0000-4000-8000-000000000002', 'aid': '0', 'net': 'ws', 'tls': 'tls'})))}',
+      ),
+      {'enabled': true, 'concurrency': 8},
+    );
+    expect(
+      muxFor('trojan://secret@example.com:443?security=tls&type=ws#Trojan'),
+      {'enabled': false},
+    );
+    expect(muxFor('vless://id@example.com:443?security=tls&type=xhttp#XHTTP'), {
+      'enabled': false,
+    });
+    expect(
+      muxFor(
+        'vless://id@example.com:443?security=reality&type=tcp'
+        '&flow=xtls-rprx-vision&pbk=key#Vision',
+      ),
+      {'enabled': false},
+    );
+  });
+
+  test(
     'parses SIP002 and legacy Shadowsocks with special unicode passwords',
     () {
       final credentials = base64Url
@@ -331,6 +422,48 @@ hy2://secret@hy.example:443?sni=hy.example#HY2
         file.path,
       ]);
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('bundled Xray accepts optional QUIC block and Mux schema', () async {
+    if (!Platform.isWindows) return;
+    final xray = File('windows/xray/bin/xray-v26.7.28.exe');
+    if (!await xray.exists()) return;
+    final server = parser
+        .parse('vless://id@example.com:443?security=tls&type=ws#Mux')
+        .single;
+    final directory = await Directory.systemTemp.createTemp('niraN-mux-');
+    try {
+      for (final concurrency in const [1, 8, 16, 32]) {
+        final file = File(
+          '${directory.path}${Platform.pathSeparator}mux-$concurrency.json',
+        );
+        await file.writeAsString(
+          builder.build(
+            server: server,
+            settings: {
+              ...settings,
+              'blockQuic': true,
+              'muxEnabled': true,
+              'muxConcurrency': concurrency,
+            },
+          ),
+        );
+        final result = await Process.run(xray.absolute.path, [
+          'run',
+          '-test',
+          '-c',
+          file.path,
+        ]);
+        expect(
+          result.exitCode,
+          0,
+          reason:
+              'concurrency=$concurrency: ${result.stdout}\n${result.stderr}',
+        );
+      }
     } finally {
       await directory.delete(recursive: true);
     }

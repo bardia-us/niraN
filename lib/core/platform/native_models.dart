@@ -203,6 +203,9 @@ class NativeSettings {
     this.sniffingEnabled = true,
     this.sniffingType = 'http,tls,quic',
     this.routeOnly = false,
+    this.blockQuic = false,
+    this.muxEnabled = false,
+    this.muxConcurrency = 8,
     this.xrayLogLevel = 'warning',
     this.fragmentEnabled = false,
     this.fragmentPackets = 'tlshello',
@@ -268,6 +271,9 @@ class NativeSettings {
     sniffingEnabled: map['sniffingEnabled'] != false,
     sniffingType: '${map['sniffingType'] ?? 'http,tls,quic'}',
     routeOnly: map['routeOnly'] == true,
+    blockQuic: map['blockQuic'] == true,
+    muxEnabled: map['muxEnabled'] == true,
+    muxConcurrency: _int(map['muxConcurrency']) ?? 8,
     xrayLogLevel: '${map['xrayLogLevel'] ?? 'warning'}',
     fragmentEnabled: map['fragmentEnabled'] == true,
     fragmentPackets: '${map['fragmentPackets'] ?? 'tlshello'}',
@@ -327,6 +333,9 @@ class NativeSettings {
   final bool sniffingEnabled;
   final String sniffingType;
   final bool routeOnly;
+  final bool blockQuic;
+  final bool muxEnabled;
+  final int muxConcurrency;
   final String xrayLogLevel;
   final bool fragmentEnabled;
   final String fragmentPackets;
@@ -408,6 +417,9 @@ class NativeSettings {
       sniffingEnabled: boolValue('sniffingEnabled', sniffingEnabled),
       sniffingType: stringValue('sniffingType', sniffingType),
       routeOnly: boolValue('routeOnly', routeOnly),
+      blockQuic: boolValue('blockQuic', blockQuic),
+      muxEnabled: boolValue('muxEnabled', muxEnabled),
+      muxConcurrency: intValue('muxConcurrency', muxConcurrency),
       xrayLogLevel: stringValue('xrayLogLevel', xrayLogLevel),
       fragmentEnabled: boolValue('fragmentEnabled', fragmentEnabled),
       fragmentPackets: stringValue('fragmentPackets', fragmentPackets),

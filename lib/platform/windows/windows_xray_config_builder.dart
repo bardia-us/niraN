@@ -110,7 +110,7 @@ final class WindowsXrayConfigBuilder {
       'routing': _routing(
         settings,
         iranCidrs,
-        blockQuic: _shouldBlockQuic(settings) && _isTcpBased(server),
+        blockQuic: _shouldBlockQuic(settings),
       ),
     };
     if (_bool(settings, 'enableLocalDns', true) &&
@@ -332,8 +332,28 @@ final class WindowsXrayConfigBuilder {
       },
     },
     'streamSettings': _streamSettings(server, settings),
-    'mux': {'enabled': false},
+    'mux': _mux(server, settings),
   };
+
+  Map<String, Object?> _mux(
+    WindowsServerRecord server,
+    Map<String, Object?> settings,
+  ) {
+    final enabled =
+        _bool(settings, 'muxEnabled', false) && _supportsMux(server);
+    return {
+      'enabled': enabled,
+      if (enabled) 'concurrency': _integer(settings, 'muxConcurrency', 8),
+    };
+  }
+
+  bool _supportsMux(WindowsServerRecord server) {
+    final protocol = server.protocol.toLowerCase();
+    if (protocol != 'vless' && protocol != 'vmess') return false;
+    final transport = server.transport.toLowerCase();
+    if (transport == 'xhttp' || transport == 'splithttp') return false;
+    return (server.parameters['flow'] ?? '').trim().isEmpty;
+  }
 
   Map<String, Object?> _streamSettings(
     WindowsServerRecord server,
@@ -700,19 +720,7 @@ final class WindowsXrayConfigBuilder {
       values[key] is num ? (values[key]! as num).toInt() : fallback;
   bool _tunEnabled(Map<String, Object?> values) => values['tunEnabled'] == true;
   bool _shouldBlockQuic(Map<String, Object?> values) =>
-      _bool(values, 'blockQuicForTcpTransports', true);
-  bool _isTcpBased(WindowsServerRecord server) =>
-      const {
-        'tcp',
-        'ws',
-        'grpc',
-        'xhttp',
-        'splithttp',
-      }.contains(server.transport.toLowerCase()) &&
-      !const {
-        'shadowsocks',
-        'hysteria2',
-      }.contains(server.protocol.toLowerCase());
+      _bool(values, 'blockQuic', false);
   String _listenAddress(Map<String, Object?> values) {
     if (!_bool(values, 'allowLanConnections', false)) return '127.0.0.1';
     final address = '${values['localListenAddress'] ?? '0.0.0.0'}'.trim();

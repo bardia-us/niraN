@@ -188,6 +188,13 @@ class AppStrings {
       'enableRouteOnly': 'Enable routeOnly',
       'routeOnlySummary':
           'Use sniffed domains for local routing without replacing the target address.',
+      'blockQuic': 'Block QUIC (UDP/443)',
+      'blockQuicSummary':
+          'Optional compatibility fallback. Disabled by default.',
+      'mux': 'Mux',
+      'muxSummary':
+          'Multiplex compatible VLESS/VMess connections. Disabled by default.',
+      'muxConcurrency': 'Mux concurrency',
       'remoteDns': 'Remote DNS',
       'directDns': 'Direct DNS',
       'directDnsSummary': 'Use a dedicated resolver for direct destinations.',
@@ -472,6 +479,11 @@ class AppStrings {
       'enableRouteOnly': 'فعال‌سازی routeOnly',
       'routeOnlySummary':
           'استفاده از دامنه تشخیص‌داده‌شده فقط برای مسیریابی محلی.',
+      'blockQuic': 'مسدودسازی QUIC (UDP/443)',
+      'blockQuicSummary': 'راهکار سازگاری اختیاری؛ به‌صورت پیش‌فرض خاموش است.',
+      'mux': 'مالتی‌پلکس (Mux)',
+      'muxSummary': 'ترکیب اتصال‌های سازگار VLESS/VMess؛ پیش‌فرض خاموش است.',
+      'muxConcurrency': 'هم‌زمانی Mux',
       'remoteDns': 'DNS راه‌دور',
       'directDns': 'DNS مستقیم',
       'directDnsSummary': 'استفاده از DNS جدا برای مقصدهای مستقیم.',

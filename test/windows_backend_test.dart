@@ -739,6 +739,9 @@ void main() {
       expect(migrated['proxyDialStrategy'], 'Auto');
       expect(migrated['happyEyeballs'], isFalse);
       expect(migrated['vpnInterfaceIpv6Address'], 'fdfe:dcba:9876::1/126');
+      expect(migrated['blockQuic'], isFalse);
+      expect(migrated['muxEnabled'], isFalse);
+      expect(migrated['muxConcurrency'], 8);
 
       final preserved = await loadWith({
         'routingMode': 'global',
@@ -746,11 +749,45 @@ void main() {
         'directDnsAddress': '9.9.9.9',
         'dnsParallelQuery': true,
         'proxyDialStrategy': 'UseIPv4',
+        'blockQuic': true,
+        'muxEnabled': true,
+        'muxConcurrency': 16,
       });
       expect(preserved['directDnsEnabled'], isTrue);
       expect(preserved['directDnsAddress'], '9.9.9.9');
       expect(preserved['dnsParallelQuery'], isTrue);
       expect(preserved['proxyDialStrategy'], 'UseIPv4');
+      expect(preserved['blockQuic'], isTrue);
+      expect(preserved['muxEnabled'], isTrue);
+      expect(preserved['muxConcurrency'], 16);
+    },
+  );
+
+  test(
+    'legacy explicit QUIC preference migrates without enabling by default',
+    () async {
+      Future<Map> loadWith(Map<String, Object?> settings) async {
+        final directory = await Directory.systemTemp.createTemp(
+          'niraN-quic-migration-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        await File(
+          '${directory.path}\\state.json',
+        ).writeAsString(jsonEncode({'settings': settings}));
+        final backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          host: _FakeWindowsHost(),
+          dataDirectory: directory,
+        );
+        return (await backend.initialize())['settings'] as Map;
+      }
+
+      expect((await loadWith({}))['blockQuic'], isFalse);
+      expect(
+        (await loadWith({'blockQuicForTcpTransports': true}))['blockQuic'],
+        isTrue,
+      );
     },
   );
 
@@ -1074,6 +1111,9 @@ void main() {
       await backend.updateSettings({
         'tunEnabled': true,
         'systemProxyEnabled': false,
+        'blockQuic': true,
+        'muxEnabled': true,
+        'muxConcurrency': 16,
       });
       host.calls.clear();
 
@@ -1099,6 +1139,19 @@ void main() {
         ),
         isFalse,
       );
+      expect(
+        ((xrayConfig['routing'] as Map)['rules'] as List).whereType<Map>().any(
+          (rule) =>
+              rule['network'] == 'udp' &&
+              rule['port'] == '443' &&
+              rule['outboundTag'] == 'blocked',
+        ),
+        isTrue,
+      );
+      expect((xrayConfig['outbounds'] as List).first['mux'], {
+        'enabled': true,
+        'concurrency': 16,
+      });
 
       await backend.restartService();
       expect(

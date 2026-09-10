@@ -607,6 +607,47 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     )
                   : null,
             ),
+            SwitchListTile(
+              secondary: const Icon(Icons.speed_outlined),
+              title: Text(context.s('blockQuic')),
+              subtitle: Text(context.s('blockQuicSummary')),
+              value: settings.blockQuic,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'blockQuic': value}),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.merge_type_rounded),
+              title: Text(context.s('mux')),
+              subtitle: Text(context.s('muxSummary')),
+              value: settings.muxEnabled,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'muxEnabled': value}),
+              ),
+            ),
+            if (settings.muxEnabled)
+              ListTile(
+                leading: const Icon(Icons.numbers_rounded),
+                title: Text(context.s('muxConcurrency')),
+                subtitle: Text('${settings.muxConcurrency}'),
+                onTap: () => _chooseValue(
+                  context,
+                  title: context.s('muxConcurrency'),
+                  current: '${settings.muxConcurrency}',
+                  values: const {
+                    '1': '1',
+                    '4': '4',
+                    '8': '8',
+                    '16': '16',
+                    '32': '32',
+                  },
+                  onSelected: (value) => controller.updateSettings({
+                    'muxConcurrency': int.parse(value),
+                  }),
+                ),
+              ),
           ],
         ),
         _SettingsGroup(

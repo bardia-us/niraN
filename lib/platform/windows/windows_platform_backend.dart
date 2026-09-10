@@ -1080,6 +1080,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'happyEyeballs',
       'sniffingEnabled',
       'routeOnly',
+      'blockQuic',
+      'muxEnabled',
       'enableIpv6',
       'preferIpv6',
       'autoUpdate',
@@ -1219,6 +1221,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         throw _platformError('invalid_settings', 'Ping concurrency is invalid');
       }
       updated['realPingConcurrency'] = value;
+    }
+    final muxConcurrency = values['muxConcurrency'];
+    if (muxConcurrency != null) {
+      final value = muxConcurrency is num ? muxConcurrency.toInt() : -1;
+      if (!const {1, 4, 8, 16, 32}.contains(value)) {
+        throw _platformError('invalid_settings', 'Mux concurrency is invalid');
+      }
+      updated['muxConcurrency'] = value;
     }
     final delayTimeout = values['realDelayTimeoutSeconds'];
     if (delayTimeout != null) {
@@ -1826,6 +1836,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
           if (!settings.containsKey('proxyDialStrategy'))
             'proxyDialStrategy': 'Auto',
           if (!settings.containsKey('happyEyeballs')) 'happyEyeballs': false,
+          if (!settings.containsKey('blockQuic'))
+            'blockQuic': settings['blockQuicForTcpTransports'] == true,
+          if (!settings.containsKey('muxEnabled')) 'muxEnabled': false,
+          if (!settings.containsKey('muxConcurrency')) 'muxConcurrency': 8,
         };
       }
       _settings['connectionMode'] = 'proxy';
@@ -2249,6 +2263,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'sniffingEnabled': true,
     'sniffingType': 'http,tls,quic',
     'routeOnly': false,
+    'blockQuic': false,
+    'muxEnabled': false,
+    'muxConcurrency': 8,
     'xrayLogLevel': 'warning',
     'fragmentEnabled': false,
     'fragmentPackets': 'tlshello',
@@ -2314,6 +2331,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'domainStrategy',
     'sniffingEnabled',
     'routeOnly',
+    'blockQuic',
+    'muxEnabled',
+    'muxConcurrency',
     'enableIpv6',
     'preferIpv6',
     'enableUdp',
