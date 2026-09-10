@@ -29,6 +29,7 @@ class HomeScreen extends ConsumerWidget {
           error: app?.subscriptionError,
           settings: app?.settings ?? const NativeSettings(),
           logs: app?.logs ?? const <LogEntry>[],
+          isPinging: app?.isPinging ?? false,
         );
       }),
     );
@@ -40,6 +41,7 @@ class HomeScreen extends ConsumerWidget {
       subscriptionError: view.error,
       settings: view.settings,
       logs: view.logs,
+      isPinging: view.isPinging,
     );
     final controller = ref.read(appControllerProvider.notifier);
     return RefreshIndicator(
@@ -235,10 +237,12 @@ class _ConnectionCard extends StatelessWidget {
                       'failed' => context.s('failed'),
                       _ => selected.ping == null ? '—' : '${selected.ping} ms',
                     },
-                    onTap: () => _perform(
-                      context,
-                      () => controller.pingServer(selected.id),
-                    ),
+                    onTap: app.isPinging
+                        ? null
+                        : () => _perform(
+                            context,
+                            () => controller.pingServer(selected.id),
+                          ),
                   ),
                 ),
               ],
@@ -461,11 +465,13 @@ class _DesktopConnectionControls extends StatelessWidget {
         reducedEffects: settings.performanceMode,
         child: _ProxyActionButton(
           selected: settings.systemProxyState == 'clear',
-          onPressed: () => _runProxyAction(
-            context,
-            controller.clearSystemProxy,
-            context.s('systemProxyClearedToast'),
-          ),
+          onPressed: connection.isBusy
+              ? null
+              : () => _runProxyAction(
+                  context,
+                  controller.clearSystemProxy,
+                  context.s('systemProxyClearedToast'),
+                ),
           icon: Icons.cleaning_services_outlined,
           label: context.s('clearSystemProxy'),
         ),

@@ -23,6 +23,9 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   StreamSubscription<Map<dynamic, dynamic>>? _events;
   Future<void>? _logsRefresh;
   Future<void>? _subscriptionRefresh;
+  Future<int>? _tcpPingOperation;
+  final Map<String, Future<void>> _activeActions = {};
+  final Map<String, DateTime> _lastActionStarted = {};
   int _settingsRevision = 0;
 
   @override
@@ -83,6 +86,14 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   }
 
   Future<void> selectServer(String id) async {
+    final connection = _current?.connection;
+    if (connection != null && (connection.isConnected || connection.isBusy)) {
+      return _runExclusiveAction('connection', () => _selectServerOnce(id));
+    }
+    return _selectServerOnce(id);
+  }
+
+  Future<void> _selectServerOnce(String id) async {
     final previous = _current?.servers ?? const <ServerInfo>[];
     _set(
       (value) => value.copyWith(
@@ -153,11 +164,19 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     return _number(data['restored']);
   }
 
-  Future<void> connect() => NirangNative.connect(_current?.selectedServer?.id);
-  Future<void> disconnect() => NirangNative.disconnect();
-  Future<void> restartService() => NirangNative.restartService();
+  Future<void> connect() => _runExclusiveAction(
+    'connection',
+    () => NirangNative.connect(_current?.selectedServer?.id),
+  );
+  Future<void> disconnect() =>
+      _runExclusiveAction('connection', NirangNative.disconnect);
+  Future<void> restartService() =>
+      _runExclusiveAction('connection', NirangNative.restartService);
 
-  Future<void> pingServer(String id) async {
+  Future<void> pingServer(String id) =>
+      _runExclusiveAction('ping', () => _pingServerOnce(id));
+
+  Future<void> _pingServerOnce(String id) async {
     _set((value) => value.copyWith(isPinging: true));
     try {
       await NirangNative.pingServer(id);
@@ -167,9 +186,20 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     }
   }
 
-  Future<int> tcpPingServer(String id) => NirangNative.tcpPingServer(id);
+  Future<int> tcpPingServer(String id) {
+    final active = _tcpPingOperation;
+    if (active != null) return active;
+    late final Future<int> request;
+    request = NirangNative.tcpPingServer(id).whenComplete(() {
+      if (identical(_tcpPingOperation, request)) _tcpPingOperation = null;
+    });
+    _tcpPingOperation = request;
+    return request;
+  }
 
-  Future<void> pingAll() async {
+  Future<void> pingAll() => _runExclusiveAction('ping', _pingAllOnce);
+
+  Future<void> _pingAllOnce() async {
     _set((value) => value.copyWith(isPinging: true));
     try {
       await NirangNative.pingAll();
@@ -179,16 +209,31 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     }
   }
 
-  Future<void> cancelPing() async {
+  Future<void> cancelPing() =>
+      _runExclusiveAction('pingCancel', _cancelPingOnce);
+
+  Future<void> _cancelPingOnce() async {
     await NirangNative.cancelPing();
     _set((value) => value.copyWith(isPinging: false));
   }
 
-  Future<void> clearSystemProxy() => NirangNative.clearSystemProxy();
+  Future<void> clearSystemProxy() =>
+      _runExclusiveAction('systemProxy', NirangNative.clearSystemProxy);
 
-  Future<void> setSystemProxy() => NirangNative.setSystemProxy();
+  Future<void> setSystemProxy() =>
+      _runExclusiveAction('systemProxy', NirangNative.setSystemProxy);
 
-  Future<void> updateSettings(Map<String, Object?> values) async {
+  Future<void> updateSettings(Map<String, Object?> values) {
+    if (values.keys.any(_networkSettingKeys.contains)) {
+      return _runExclusiveAction(
+        'connection',
+        () => _updateSettingsOnce(values),
+      );
+    }
+    return _updateSettingsOnce(values);
+  }
+
+  Future<void> _updateSettingsOnce(Map<String, Object?> values) async {
     final previous = _current?.settings ?? const NativeSettings();
     final revision = ++_settingsRevision;
     _set((value) => value.copyWith(settings: previous.withUpdates(values)));
@@ -203,6 +248,27 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       }
       rethrow;
     }
+  }
+
+  Future<void> _runExclusiveAction(
+    String key,
+    Future<void> Function() operation, {
+    Duration cooldown = const Duration(milliseconds: 600),
+  }) {
+    final active = _activeActions[key];
+    if (active != null) return active;
+    final now = DateTime.now();
+    final lastStarted = _lastActionStarted[key];
+    if (lastStarted != null && now.difference(lastStarted) < cooldown) {
+      return Future<void>.value();
+    }
+    _lastActionStarted[key] = now;
+    late final Future<void> request;
+    request = Future<void>.sync(operation).whenComplete(() {
+      if (identical(_activeActions[key], request)) _activeActions.remove(key);
+    });
+    _activeActions[key] = request;
+    return request;
   }
 
   Future<void> resetSettings() => updateSettings(const {
@@ -375,13 +441,59 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     logs: _logs(map['logs'] as List<dynamic>? ?? const []),
     lastUpdated: _number(map['lastUpdated']),
     coreVersion: '${map['coreVersion'] ?? 'Unavailable'}',
-    appVersion: '${map['appVersion'] ?? '0.3.4'}',
+    appVersion: '${map['appVersion'] ?? '0.3.5'}',
     subscriptionConfigured: map['subscriptionConfigured'] == true,
     telegramEligible: map['telegramEligible'] == true,
     subscriptionError: map['subscriptionError']?.toString(),
     deletedServerCount: _number(map['deletedServerCount']),
   );
 }
+
+const _networkSettingKeys = <String>{
+  'tunEnabled',
+  'routingMode',
+  'customDomains',
+  'customIps',
+  'enableLocalDns',
+  'enableFakeDns',
+  'directDnsEnabled',
+  'remoteDns',
+  'directDnsAddress',
+  'vpnDns',
+  'vpnInterfaceAddress',
+  'vpnInterfaceIpv6Address',
+  'localSocksPort',
+  'localHttpPort',
+  'vpnMtu',
+  'domainStrategy',
+  'sniffingEnabled',
+  'routeOnly',
+  'blockQuic',
+  'muxEnabled',
+  'muxConcurrency',
+  'enableIpv6',
+  'preferIpv6',
+  'enableUdp',
+  'allowLanConnections',
+  'localListenAddress',
+  'sniffingType',
+  'xrayLogLevel',
+  'fragmentEnabled',
+  'fragmentPackets',
+  'fragmentLength',
+  'fragmentInterval',
+  'fragmentMaxSplit',
+  'domesticDns',
+  'dnsQueryStrategy',
+  'dnsParallelQuery',
+  'dnsServeStale',
+  'directTargetStrategy',
+  'proxyTargetStrategy',
+  'proxyDialStrategy',
+  'happyEyeballs',
+  'defaultFingerprint',
+  'defaultUserAgent',
+};
 
 Map<dynamic, dynamic> _map(dynamic value) => value is Map ? value : const {};
 int _number(dynamic value) =>

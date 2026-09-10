@@ -935,6 +935,51 @@ void main() {
     }
   });
 
+  test(
+    'duplicate ping requests share one active speed-test operation',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-ping-antispam-',
+      );
+      final delayStarted = Completer<void>();
+      final releaseDelay = Completer<int>();
+      final host = _FakeWindowsHost();
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: _AllowedRemoteAccess(),
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+          proxyReadinessProbe: (_) async {},
+          realDelayProbe: (_) {
+            if (!delayStarted.isCompleted) delayStarted.complete();
+            return releaseDelay.future;
+          },
+        );
+        await backend.initialize();
+
+        final first = backend.pingServer('server');
+        await delayStarted.future.timeout(const Duration(seconds: 2));
+        final duplicate = backend.pingServer('server');
+        releaseDelay.complete(42);
+        await Future.wait([first, duplicate]);
+
+        expect(
+          host.calls.where((call) => call == 'startSpeedtest'),
+          hasLength(1),
+        );
+        expect(
+          host.calls.where((call) => call == 'stopSpeedtest'),
+          hasLength(1),
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
   test('repeated Xray log lines are throttled in the UI log buffer', () async {
     final directory = await Directory.systemTemp.createTemp(
       'niraN-log-dedup-test-',

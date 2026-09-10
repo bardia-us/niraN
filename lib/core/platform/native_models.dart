@@ -511,7 +511,7 @@ class AppSnapshot {
     this.logs = const [],
     this.lastUpdated = 0,
     this.coreVersion = 'Unavailable',
-    this.appVersion = '0.3.4',
+    this.appVersion = '0.3.5',
     this.subscriptionConfigured = false,
     this.telegramEligible = false,
     this.subscriptionError,

@@ -49,7 +49,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.4';
+  static const _appVersionFallback = '0.3.5';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -92,6 +92,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   int _lastUpdated = 0;
   int _openCount = 0;
   int _pingGeneration = 0;
+  Future<void>? _activePingOperation;
   String _coreVersion = 'Unavailable';
   String? _coreVersionMismatch;
   String _singBoxVersion = 'Unavailable';
@@ -736,7 +737,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<void> pingServer(String id) async {
+  Future<void> pingServer(String id) =>
+      _runExclusivePing(() => _pingServerOnce(id));
+
+  Future<void> _pingServerOnce(String id) async {
     final server = _server(id);
     if (server == null) throw _platformError('not_found', 'Server not found');
     final generation = ++_pingGeneration;
@@ -784,7 +788,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<void> pingAll() async {
+  Future<void> pingAll() => _runExclusivePing(_pingAllOnce);
+
+  Future<void> _pingAllOnce() async {
     final generation = ++_pingGeneration;
     final candidates = _visibleServers;
     final batchSize = _integerSetting('realPingConcurrency', 16);
@@ -1014,6 +1020,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   Future<void> _pingConnectedServer(WindowsServerRecord server) async {
+    await _runExclusivePing(() => _pingConnectedServerOnce(server));
+  }
+
+  Future<void> _pingConnectedServerOnce(WindowsServerRecord server) async {
     if (_servers.any((item) => item.pingStatus == 'testing')) return;
     final generation = ++_pingGeneration;
     server
@@ -1034,6 +1044,22 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         ..pingStatus = 'timeout';
       _emitPing(server);
     }
+  }
+
+  Future<void> _runExclusivePing(Future<void> Function() operation) {
+    final active = _activePingOperation;
+    if (active != null) {
+      _log('debug', 'Ignored a duplicate latency request');
+      return active;
+    }
+    late final Future<void> request;
+    request = Future<void>.sync(operation).whenComplete(() {
+      if (identical(_activePingOperation, request)) {
+        _activePingOperation = null;
+      }
+    });
+    _activePingOperation = request;
+    return request;
   }
 
   @override
