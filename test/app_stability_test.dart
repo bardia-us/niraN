@@ -673,6 +673,44 @@ void main() {
   });
 
   testWidgets(
+    'advanced resolution strategy menus expose ordered IPv4 and IPv6 fallback',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appControllerProvider.overrideWith(() => _FakeAppController()),
+          ],
+          child: const NirangApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.settings_outlined));
+      await tester.pumpAndSettle();
+      await _expandSettingsSection(
+        tester,
+        'Advanced settings',
+        visibleChild: 'Proxy target resolution',
+      );
+      await tester.scrollUntilVisible(
+        find.text('Proxy target resolution'),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await Scrollable.ensureVisible(
+        tester.element(find.text('Proxy target resolution')),
+        alignment: .4,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Proxy target resolution'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('IPv4, then IPv6'), findsOneWidget);
+      expect(find.text('IPv6, then IPv4'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'MTU validates, cancels, applies, and reopens with synced state',
     (tester) async {
       late _FakeAppController controller;
