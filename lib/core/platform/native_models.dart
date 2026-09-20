@@ -206,6 +206,8 @@ class NativeSettings {
     this.blockQuic = false,
     this.muxEnabled = false,
     this.muxConcurrency = 8,
+    this.muxXudpConcurrency = 16,
+    this.muxQuicHandling = 'reject',
     this.xrayLogLevel = 'warning',
     this.fragmentEnabled = false,
     this.fragmentPackets = 'tlshello',
@@ -274,6 +276,8 @@ class NativeSettings {
     blockQuic: map['blockQuic'] == true,
     muxEnabled: map['muxEnabled'] == true,
     muxConcurrency: _int(map['muxConcurrency']) ?? 8,
+    muxXudpConcurrency: _int(map['muxXudpConcurrency']) ?? 16,
+    muxQuicHandling: '${map['muxQuicHandling'] ?? 'reject'}',
     xrayLogLevel: '${map['xrayLogLevel'] ?? 'warning'}',
     fragmentEnabled: map['fragmentEnabled'] == true,
     fragmentPackets: '${map['fragmentPackets'] ?? 'tlshello'}',
@@ -336,6 +340,8 @@ class NativeSettings {
   final bool blockQuic;
   final bool muxEnabled;
   final int muxConcurrency;
+  final int muxXudpConcurrency;
+  final String muxQuicHandling;
   final String xrayLogLevel;
   final bool fragmentEnabled;
   final String fragmentPackets;
@@ -420,6 +426,8 @@ class NativeSettings {
       blockQuic: boolValue('blockQuic', blockQuic),
       muxEnabled: boolValue('muxEnabled', muxEnabled),
       muxConcurrency: intValue('muxConcurrency', muxConcurrency),
+      muxXudpConcurrency: intValue('muxXudpConcurrency', muxXudpConcurrency),
+      muxQuicHandling: stringValue('muxQuicHandling', muxQuicHandling),
       xrayLogLevel: stringValue('xrayLogLevel', xrayLogLevel),
       fragmentEnabled: boolValue('fragmentEnabled', fragmentEnabled),
       fragmentPackets: stringValue('fragmentPackets', fragmentPackets),
@@ -511,7 +519,7 @@ class AppSnapshot {
     this.logs = const [],
     this.lastUpdated = 0,
     this.coreVersion = 'Unavailable',
-    this.appVersion = '0.3.5',
+    this.appVersion = '0.3.6',
     this.subscriptionConfigured = false,
     this.telegramEligible = false,
     this.subscriptionError,

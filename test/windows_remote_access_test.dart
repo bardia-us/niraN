@@ -142,6 +142,40 @@ void main() {
       expect(transport.payloads.last['app_version'], '0.3.3+6');
     },
   );
+
+  test(
+    'forced update unlocks immediately after backend policy is lowered',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-access-update-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final transport = _RegistryTransport();
+      final service = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(),
+        dataProtector: const _TestDataProtector(),
+        transport: transport,
+        dataDirectory: directory,
+      );
+      await service.accept();
+
+      transport.updateRequired = true;
+      await expectLater(
+        service.requireAllowed(),
+        throwsA(
+          isA<DeviceAccessException>().having(
+            (error) => error.reason,
+            'reason',
+            'update_required',
+          ),
+        ),
+      );
+
+      transport.updateRequired = false;
+      await service.requireAllowed();
+      expect(await service.initialize(), isTrue);
+    },
+  );
 }
 
 final class _TestDataProtector implements WindowsDataProtector {
@@ -182,6 +216,7 @@ final class _RegistryTransport implements WindowsRegistryTransport {
   final List<Map<String, Object?>> payloads = [];
   final List<String?> tokens = [];
   bool blocked = false;
+  bool updateRequired = false;
 
   @override
   Future<RegistryResponse> send(
@@ -202,6 +237,21 @@ final class _RegistryTransport implements WindowsRegistryTransport {
           'minimum_version': '0.3.1',
           'update_required': false,
           'reason': 'blocked_by_administrator',
+        },
+        usageHeader: null,
+      );
+    }
+    if (updateRequired) {
+      return const RegistryResponse(
+        statusCode: 426,
+        bytes: [],
+        json: {
+          'ok': false,
+          'allowed': false,
+          'blocked': false,
+          'minimum_version': '0.3.6',
+          'update_required': true,
+          'reason': 'update_required',
         },
         usageHeader: null,
       );

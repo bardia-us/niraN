@@ -10,9 +10,11 @@ import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/update_checker.dart';
+import '../../core/windows_release_state.dart';
 import '../../core/windows_update_manager.dart';
 import '../../core/widgets/glass_dialog.dart';
 import '../../core/widgets/operation_error.dart';
+import '../../core/widgets/release_notes_markdown.dart';
 import '../logs/logs_screen.dart';
 import '../servers/servers_screen.dart';
 import '../settings/settings_screen.dart';
@@ -30,8 +32,10 @@ class _AppShellState extends ConsumerState<AppShell> {
   static Future<ReleaseCheckResult?>? _startupUpdateOperation;
   int _index = 0;
   bool _reminderQueued = false;
+  bool _successfulPingSinceConnect = false;
   bool _performancePromptQueued = false;
   bool _startupUpdateQueued = false;
+  bool _whatsNewQueued = false;
   late UpdateDownloadStatus _lastUpdateStatus;
   bool _installPromptQueued = false;
 
@@ -112,14 +116,31 @@ class _AppShellState extends ConsumerState<AppShell> {
         (value) => (
           ready: value.asData != null,
           loading: value.isLoading,
-          error: value.hasError ? '${value.error}' : null,
+          error: value.hasError ? value.error : null,
           performanceMode:
               value.asData?.value.settings.performanceMode ?? false,
         ),
       ),
     );
-    ref.listen(appControllerProvider, (_, next) {
+    ref.listen(appControllerProvider, (previous, next) {
       next.whenData((app) {
+        final previousApp = previous?.asData?.value;
+        if (!app.connection.isConnected) {
+          _successfulPingSinceConnect = false;
+        } else {
+          final previousServers = {
+            for (final server in previousApp?.servers ?? const <ServerInfo>[])
+              server.id: server,
+          };
+          final freshSuccess = app.servers.any((server) {
+            if (server.status != 'success' || server.ping == null) return false;
+            final before = previousServers[server.id];
+            return before == null ||
+                before.status != 'success' ||
+                before.ping != server.ping;
+          });
+          if (freshSuccess) _successfulPingSinceConnect = true;
+        }
         if (!_performancePromptQueued &&
             !app.settings.performanceModePrompted) {
           _performancePromptQueued = true;
@@ -131,6 +152,8 @@ class _AppShellState extends ConsumerState<AppShell> {
         if (!_reminderQueued &&
             app.settings.performanceModePrompted &&
             app.telegramEligible &&
+            app.connection.isConnected &&
+            _successfulPingSinceConnect &&
             !app.connection.isBusy &&
             !app.isPinging) {
           _reminderQueued = true;
@@ -155,7 +178,9 @@ class _AppShellState extends ConsumerState<AppShell> {
                 const Icon(Icons.error_outline_rounded, size: 42),
                 const SizedBox(height: 12),
                 Text(
-                  '${context.s('operationFailed')}\n${shellState.error ?? context.s('unknown')}',
+                  shellState.error == null
+                      ? context.s('operationFailed')
+                      : friendlyErrorMessage(context, shellState.error!),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
@@ -173,8 +198,10 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (!_startupUpdateQueued) {
       _startupUpdateQueued = true;
       final version = ref.read(appControllerProvider).value?.appVersion ?? '';
+      final language =
+          ref.read(appControllerProvider).value?.settings.language ?? 'en';
       WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _checkStartupUpdate(version),
+        (_) => _checkStartupUpdate(version, language),
       );
     }
 
@@ -283,11 +310,11 @@ class _AppShellState extends ConsumerState<AppShell> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(7),
                         child: Image.asset(
-                          'assets/branding/nirang-logo-concept.png',
+                          'assets/branding/nirang-mark.png',
+                          filterQuality: FilterQuality.high,
                           width: 30,
                           height: 30,
-                          cacheWidth: 60,
-                          cacheHeight: 60,
+                          semanticLabel: 'niraN',
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -383,7 +410,10 @@ class _AppShellState extends ConsumerState<AppShell> {
     });
   }
 
-  Future<void> _checkStartupUpdate(String currentVersion) async {
+  Future<void> _checkStartupUpdate(
+    String currentVersion,
+    String language,
+  ) async {
     if (!mounted || currentVersion.isEmpty) return;
     await WindowsUpdateManager.instance.initialize(currentVersion);
     try {
@@ -454,37 +484,63 @@ class _AppShellState extends ConsumerState<AppShell> {
       }
     } on Object {
       // Startup must remain usable when GitHub is unavailable.
+    } finally {
+      if (!_whatsNewQueued) {
+        _whatsNewQueued = true;
+        await _showWhatsNewIfNeeded(currentVersion, language);
+      }
+    }
+  }
+
+  Future<void> _showWhatsNewIfNeeded(
+    String currentVersion,
+    String language,
+  ) async {
+    final releaseState = WindowsReleaseState();
+    if (!await releaseState.shouldShowWhatsNew(currentVersion) || !mounted) {
+      return;
+    }
+    try {
+      final notes = await const GitHubUpdateChecker().releaseNotes(
+        currentVersion,
+      );
+      if (!mounted) return;
+      final body = notes.forLanguage(language);
+      if (body.trim().isEmpty) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => NirangAlertDialog(
+          icon: const Icon(Icons.auto_awesome_rounded),
+          title: Text(language == 'fa' ? 'چه چیزهایی جدید است؟' : "What's New"),
+          content: ReleaseNotesMarkdown(data: body),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(language == 'fa' ? 'باشه' : 'Got it'),
+            ),
+          ],
+        ),
+      );
+      await releaseState.markSeen(currentVersion);
+    } on Object {
+      // Missing release notes must not block the upgraded app. Keep the state
+      // unseen so a later launch can retry after connectivity is restored.
     }
   }
 
   Future<void> _showTelegramReminder() async {
     if (!mounted) return;
-    var never = false;
     final decision = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => NirangAlertDialog(
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: NirangAlertDialog(
           icon: const Icon(Icons.campaign_outlined),
           title: Text(context.s('joinTelegramTitle')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(context.s('joinTelegramBody')),
-              CheckboxListTile(
-                value: never,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                onChanged: (value) =>
-                    setDialogState(() => never = value ?? false),
-                title: Text(context.s('dontShowAgain')),
-              ),
-            ],
-          ),
+          content: Text(context.s('joinTelegramBody')),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, 'later'),
-              child: Text(context.s('later')),
-            ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, 'join'),
               child: Text(context.s('joinTelegram')),
@@ -495,9 +551,12 @@ class _AppShellState extends ConsumerState<AppShell> {
     );
     if (!mounted || decision == null) return;
     final controller = ref.read(appControllerProvider.notifier);
-    if (decision == 'join') {
+    try {
       await controller.openTelegram();
+      await controller.recordTelegramDecision('joined');
+    } on Object catch (error) {
+      _reminderQueued = false;
+      if (mounted) await showOperationError(context, error);
     }
-    await controller.recordTelegramDecision(never ? 'never' : 'later');
   }
 }

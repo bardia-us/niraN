@@ -2,7 +2,9 @@
 declare(strict_types=1);
 
 const NIRANG_DEFAULT_MINIMUM_ANDROID_VERSION = '1.1.1';
+const NIRANG_DEFAULT_MINIMUM_ANDROID_BUILD = 0;
 const NIRANG_DEFAULT_MINIMUM_WINDOWS_VERSION = '0.3.1';
+const NIRANG_DEFAULT_MINIMUM_WINDOWS_UPDATE_VERSION = '0.0.0';
 
 function registry_environment(string $name): ?string
 {
@@ -46,6 +48,7 @@ function registry_database(): PDO
             os_version TEXT NOT NULL DEFAULT \'\',
             app_name TEXT NOT NULL DEFAULT \'niraN\',
             app_version TEXT NOT NULL,
+            app_build INTEGER NOT NULL DEFAULT 0,
             first_seen TEXT NOT NULL,
             last_seen TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -62,10 +65,12 @@ function registry_database(): PDO
         'app_name' => "TEXT NOT NULL DEFAULT 'niraN'",
         'device_key' => "TEXT NULL",
         'access_token_hash' => "TEXT NULL",
+        'access_token_expires_at' => "TEXT NULL",
         'reinstalled_after_block' => "INTEGER NOT NULL DEFAULT 0",
         'bypass_attempts' => "INTEGER NOT NULL DEFAULT 0",
         'last_access_status' => "TEXT NOT NULL DEFAULT 'unknown'",
         'schema_version' => "INTEGER NOT NULL DEFAULT 0",
+        'app_build' => "INTEGER NOT NULL DEFAULT 0",
     ]);
     registry_merge_duplicate_devices($pdo);
     $pdo->exec(
@@ -93,6 +98,20 @@ function registry_database(): PDO
          ON installations(device_key) WHERE device_key IS NOT NULL'
     );
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_installations_token ON installations(access_token_hash)');
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS api_nonces (
+            nonce_hash TEXT PRIMARY KEY,
+            expires_at INTEGER NOT NULL
+        )'
+    );
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS api_rate_limits (
+            bucket_key TEXT NOT NULL,
+            window_start INTEGER NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bucket_key, window_start)
+        )'
+    );
     registry_set_default($pdo, 'minimum_controllable_version', NIRANG_DEFAULT_MINIMUM_ANDROID_VERSION);
     $legacyAndroidMinimum = registry_setting(
         $pdo,
@@ -100,7 +119,13 @@ function registry_database(): PDO
         NIRANG_DEFAULT_MINIMUM_ANDROID_VERSION
     );
     registry_set_default($pdo, 'minimum_android_version', $legacyAndroidMinimum);
+    registry_set_default($pdo, 'minimum_android_build', (string)NIRANG_DEFAULT_MINIMUM_ANDROID_BUILD);
     registry_set_default($pdo, 'minimum_windows_version', NIRANG_DEFAULT_MINIMUM_WINDOWS_VERSION);
+    registry_set_default(
+        $pdo,
+        'minimum_windows_update_version',
+        NIRANG_DEFAULT_MINIMUM_WINDOWS_UPDATE_VERSION
+    );
     return $pdo;
 }
 
@@ -205,6 +230,19 @@ function registry_minimum_version(PDO $pdo, string $platform): string
     throw new InvalidArgumentException('Unsupported platform');
 }
 
+function registry_minimum_android_build(PDO $pdo): int
+{
+    $value = registry_setting($pdo, 'minimum_android_build', (string)NIRANG_DEFAULT_MINIMUM_ANDROID_BUILD);
+    return preg_match('/^[0-9]{1,10}$/', $value) === 1 ? (int)$value : NIRANG_DEFAULT_MINIMUM_ANDROID_BUILD;
+}
+
+function registry_valid_build($value): ?int
+{
+    if (is_int($value)) return $value >= 0 ? $value : null;
+    if (is_string($value) && preg_match('/^[0-9]{1,10}$/', $value) === 1) return (int)$value;
+    return null;
+}
+
 function registry_valid_version($value): ?string
 {
     if (!is_string($value)) {
@@ -217,6 +255,128 @@ function registry_valid_version($value): ?string
 function registry_is_outdated(string $version, string $minimum): bool
 {
     return version_compare(preg_replace('/[-+].*$/', '', $version), preg_replace('/[-+].*$/', '', $minimum), '<');
+}
+
+/** Forced-update policy is independent from the Device Registry display policy. */
+function registry_minimum_update_version(PDO $pdo, string $platform): string
+{
+    if ($platform === 'windows') {
+        return registry_setting(
+            $pdo,
+            'minimum_windows_update_version',
+            NIRANG_DEFAULT_MINIMUM_WINDOWS_UPDATE_VERSION
+        );
+    }
+    return registry_minimum_version($pdo, $platform);
+}
+
+function registry_normalize_release_version(?string $version): ?string
+{
+    if (!is_string($version)) return null;
+    $version = preg_replace('/^v/i', '', trim($version));
+    if (!is_string($version)) return null;
+    return registry_valid_version($version);
+}
+
+function registry_is_latest_version(string $version, ?string $latestVersion): bool
+{
+    $installed = registry_normalize_release_version($version);
+    $latest = registry_normalize_release_version($latestVersion);
+    if ($installed === null || $latest === null) return false;
+    return version_compare(
+        preg_replace('/[-+].*$/', '', $installed),
+        preg_replace('/[-+].*$/', '', $latest),
+        '=='
+    );
+}
+
+function registry_fetch_latest_release_version(string $repository): ?string
+{
+    if (preg_match('/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/', $repository) !== 1) return null;
+    $url = 'https://api.github.com/repos/' . $repository . '/releases/latest';
+    $body = false;
+    if (function_exists('curl_init')) {
+        $curl = curl_init($url);
+        if ($curl !== false) {
+            curl_setopt_array($curl, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT => 5,
+                CURLOPT_HTTPHEADER => [
+                    'Accept: application/vnd.github+json',
+                    'User-Agent: niraNG-device-registry',
+                    'X-GitHub-Api-Version: 2022-11-28',
+                ],
+            ]);
+            $response = curl_exec($curl);
+            $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+            if (is_string($response) && $status === 200) $body = $response;
+        }
+    } else {
+        $context = stream_context_create(['http' => [
+            'method' => 'GET',
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "Accept: application/vnd.github+json\r\n"
+                . "User-Agent: niraNG-device-registry\r\n"
+                . "X-GitHub-Api-Version: 2022-11-28\r\n",
+        ]]);
+        $response = @file_get_contents($url, false, $context);
+        if (is_string($response)) $body = $response;
+    }
+    if (!is_string($body)) return null;
+    $payload = json_decode($body, true);
+    return is_array($payload)
+        ? registry_normalize_release_version(is_string($payload['tag_name'] ?? null) ? $payload['tag_name'] : null)
+        : null;
+}
+
+function registry_latest_release_version(PDO $pdo, string $repository, int $cacheSeconds = 600): ?string
+{
+    $cacheKey = 'latest_release_' . hash('sha256', strtolower($repository));
+    $statement = $pdo->prepare(
+        'SELECT setting_value, updated_at FROM admin_settings WHERE setting_key = :key LIMIT 1'
+    );
+    $statement->execute([':key' => $cacheKey]);
+    $cached = $statement->fetch();
+    $cachedVersion = is_array($cached)
+        ? registry_normalize_release_version(is_string($cached['setting_value'] ?? null) ? $cached['setting_value'] : null)
+        : null;
+    $cachedAt = is_array($cached) && is_string($cached['updated_at'] ?? null)
+        ? strtotime($cached['updated_at'])
+        : false;
+    if ($cachedVersion !== null && $cachedAt !== false && $cachedAt >= time() - $cacheSeconds) {
+        return $cachedVersion;
+    }
+
+    $latest = registry_fetch_latest_release_version($repository);
+    if ($latest === null) return $cachedVersion;
+    $save = $pdo->prepare(
+        'INSERT INTO admin_settings (setting_key, setting_value, updated_at) VALUES (:key, :value, :updated_at)
+         ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at'
+    );
+    $save->execute([':key' => $cacheKey, ':value' => $latest, ':updated_at' => registry_now()]);
+    return $latest;
+}
+
+/** Registry presentation policy is independent from Android forced-update builds. */
+function registry_display_status(
+    string $version,
+    string $minimumDisplayVersion,
+    string $keyStatus,
+    bool $hasDeviceKey,
+    ?string $latestDisplayVersion = null
+): array {
+    $blocked = $hasDeviceKey && $keyStatus === 'blocked';
+    $outdated = registry_is_outdated($version, $minimumDisplayVersion);
+    return [
+        'blocked' => $blocked,
+        'outdated' => $outdated,
+        'latest' => registry_is_latest_version($version, $latestDisplayVersion),
+        'status' => $blocked
+            ? 'blocked'
+            : ($outdated ? 'outdated' : ($hasDeviceKey && $keyStatus === 'allowed' ? 'allowed' : 'unknown')),
+    ];
 }
 
 function registry_short_key(?string $key): string
@@ -266,22 +426,39 @@ function registry_subscription_auth_headers(
     ];
 }
 
-function registry_access_payload(bool $allowed, bool $blocked, string $minimum, bool $updateRequired, string $reason): array
+function registry_access_payload(
+    bool $allowed,
+    bool $blocked,
+    string $minimum,
+    bool $updateRequired,
+    string $reason,
+    int $minimumBuild = 0
+): array
 {
     return [
         'ok' => $allowed,
         'allowed' => $allowed,
         'blocked' => $blocked,
         'minimum_version' => $minimum,
+        'minimum_build' => $minimumBuild,
         'update_required' => $updateRequired,
         'reason' => $reason,
     ];
 }
 
-function registry_access_state(string $version, string $minimum, string $keyStatus, bool $hasPriorInstallation): array
+function registry_access_state(
+    string $version,
+    string $minimum,
+    string $keyStatus,
+    bool $hasPriorInstallation,
+    ?int $appBuild = null,
+    int $minimumBuild = 0
+): array
 {
     $blocked = $keyStatus === 'blocked';
-    $outdated = registry_is_outdated($version, $minimum);
+    $outdated = $appBuild === null
+        ? registry_is_outdated($version, $minimum)
+        : $appBuild < $minimumBuild;
     return [
         'blocked' => $blocked,
         'outdated' => $outdated,

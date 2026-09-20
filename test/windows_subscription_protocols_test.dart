@@ -21,15 +21,32 @@ void main() {
     'enableUdp': true,
   };
 
-  test('semantic id ignores remark and query ordering', () {
+  test('semantic id preserves names while normalizing query ordering', () {
     final a = parser
         .parse('vless://id@example.com:443?security=tls&type=ws#One')
         .single;
     final b = parser
         .parse('vless://id@example.com:443?type=ws&security=tls#Two')
         .single;
-    expect(a.id, b.id);
+    final reordered = parser
+        .parse('vless://id@example.com:443?type=ws&security=tls#One')
+        .single;
+    expect(a.id, isNot(b.id));
+    expect(a.id, reordered.id);
   });
+
+  test(
+    'dedup removes exact duplicates but keeps differently named configs',
+    () {
+      final records = parser.parse('''
+vless://id@example.com:443?security=tls&type=ws#One
+vless://id@example.com:443?type=ws&security=tls#One
+vless://id@example.com:443?security=tls&type=ws#Two
+''');
+      expect(records, hasLength(2));
+      expect(records.map((record) => record.name), containsAll(['One', 'Two']));
+    },
+  );
 
   test('malformed entry cannot hide valid subscription entries', () {
     final result = parser.parseDetailed('''
@@ -156,7 +173,12 @@ trojan://password@two.example:443?security=tls#Two
   );
 
   test('Mux is configurable only for compatible VLESS and VMess profiles', () {
-    Map muxFor(String link, {int concurrency = 8}) {
+    Map muxFor(
+      String link, {
+      int concurrency = 8,
+      int xudpConcurrency = 16,
+      String quicHandling = 'reject',
+    }) {
       final server = parser.parse(link).single;
       final root =
           jsonDecode(
@@ -166,6 +188,8 @@ trojan://password@two.example:443?security=tls#Two
                     ...settings,
                     'muxEnabled': true,
                     'muxConcurrency': concurrency,
+                    'muxXudpConcurrency': xudpConcurrency,
+                    'muxQuicHandling': quicHandling,
                   },
                 ),
               )
@@ -179,14 +203,37 @@ trojan://password@two.example:443?security=tls#Two
           'vless://id@example.com:443?security=tls&type=ws#VLESS',
           concurrency: concurrency,
         ),
-        {'enabled': true, 'concurrency': concurrency},
+        {
+          'enabled': true,
+          'concurrency': concurrency,
+          'xudpConcurrency': 16,
+          'xudpProxyUDP443': 'reject',
+        },
       );
     }
     expect(
       muxFor(
         'vmess://${base64Url.encode(utf8.encode(jsonEncode({'v': '2', 'ps': 'VMess', 'add': 'example.com', 'port': '443', 'id': '00000000-0000-4000-8000-000000000002', 'aid': '0', 'net': 'ws', 'tls': 'tls'})))}',
       ),
-      {'enabled': true, 'concurrency': 8},
+      {
+        'enabled': true,
+        'concurrency': 8,
+        'xudpConcurrency': 16,
+        'xudpProxyUDP443': 'reject',
+      },
+    );
+    expect(
+      muxFor(
+        'vless://id@example.com:443?security=tls&type=ws#VLESS',
+        xudpConcurrency: 64,
+        quicHandling: 'allow',
+      ),
+      {
+        'enabled': true,
+        'concurrency': 8,
+        'xudpConcurrency': 64,
+        'xudpProxyUDP443': 'allow',
+      },
     );
     expect(
       muxFor('trojan://secret@example.com:443?security=tls&type=ws#Trojan'),

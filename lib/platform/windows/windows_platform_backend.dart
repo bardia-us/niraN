@@ -49,7 +49,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.5';
+  static const _appVersionFallback = '0.3.6';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -282,7 +282,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       return data;
     } on Object catch (error) {
       await _enforceBlockedAccess(error);
-      _subscriptionError = _safeError(error);
+      _subscriptionError = _subscriptionUserError(error);
       _log('warning', 'Subscription update failed');
       if (emit) _emit('subscriptionError', _subscriptionError);
       rethrow;
@@ -1096,6 +1096,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'domesticDns',
       'defaultFingerprint',
       'defaultUserAgent',
+      'muxQuicHandling',
     };
     const booleanKeys = {
       'enableLocalDns',
@@ -1177,6 +1178,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'http,tls',
       'http,tls,quic',
     });
+    _validateSettingChoice(updated, 'muxQuicHandling', const {
+      'reject',
+      'allow',
+      'skip',
+    });
     _validateSettingChoice(updated, 'defaultFingerprint', const {
       'chrome',
       'firefox',
@@ -1255,6 +1261,17 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         throw _platformError('invalid_settings', 'Mux concurrency is invalid');
       }
       updated['muxConcurrency'] = value;
+    }
+    final muxXudpConcurrency = values['muxXudpConcurrency'];
+    if (muxXudpConcurrency != null) {
+      final value = muxXudpConcurrency is num ? muxXudpConcurrency.toInt() : -1;
+      if (value < 1 || value > 1024) {
+        throw _platformError(
+          'invalid_settings',
+          'Mux XUDP concurrency is invalid',
+        );
+      }
+      updated['muxXudpConcurrency'] = value;
     }
     final delayTimeout = values['realDelayTimeoutSeconds'];
     if (delayTimeout != null) {
@@ -1402,8 +1419,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   @override
   Future<void> recordTelegramDecision(String decision) async {
-    _settings['telegramNever'] = decision == 'never';
-    _settings['telegramLastShown'] = DateTime.now().millisecondsSinceEpoch;
+    if (decision == 'joined') {
+      _settings['telegramJoined'] = true;
+    }
     await _persistState();
   }
 
@@ -1866,6 +1884,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             'blockQuic': settings['blockQuicForTcpTransports'] == true,
           if (!settings.containsKey('muxEnabled')) 'muxEnabled': false,
           if (!settings.containsKey('muxConcurrency')) 'muxConcurrency': 8,
+          if (!settings.containsKey('muxXudpConcurrency'))
+            'muxXudpConcurrency': 16,
+          if (!settings.containsKey('muxQuicHandling'))
+            'muxQuicHandling': 'reject',
         };
       }
       _settings['connectionMode'] = 'proxy';
@@ -2001,14 +2023,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   String get _telegramUrl => '${_buildConfig['telegramUrl'] ?? ''}'.trim();
 
   bool get _telegramEligible {
-    if (_telegramUrl.isEmpty ||
-        _settings['telegramNever'] == true ||
-        _openCount < 3) {
-      return false;
-    }
-    final last = (_settings['telegramLastShown'] as num?)?.toInt() ?? 0;
-    return DateTime.now().millisecondsSinceEpoch - last >=
-        const Duration(days: 7).inMilliseconds;
+    return _telegramUrl.isNotEmpty && _settings['telegramJoined'] != true;
   }
 
   void _validateSettingChoice(
@@ -2204,6 +2219,32 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     return 'Could not connect. Check the selected server and settings.';
   }
 
+  String _subscriptionUserError(Object error) {
+    final details = _safeError(error).toLowerCase();
+    if (error is TimeoutException ||
+        details.contains('timeout') ||
+        details.contains('timed out')) {
+      return 'Subscription update timed out. Check your internet connection and try again.';
+    }
+    if (error is SocketException ||
+        details.contains('failed host lookup') ||
+        details.contains('connection refused') ||
+        details.contains('network is unreachable')) {
+      return 'The subscription server could not be reached. Try another network or turn on a VPN and retry.';
+    }
+    if (error is FormatException) {
+      return 'The subscription response is invalid. Check the link or contact the subscription provider.';
+    }
+    if (error is DeviceAccessException) {
+      return error.reason == 'blocked_by_administrator'
+          ? 'This device has been blocked by the administrator.'
+          : error.reason == 'update_required'
+          ? 'A newer niraN version is required.'
+          : 'Device verification failed. Check your connection and retry.';
+    }
+    return 'Subscription update failed. Check your connection and try again.';
+  }
+
   String _truncate(String value, int limit) =>
       value.length <= limit ? value : value.substring(0, limit);
 
@@ -2292,6 +2333,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'blockQuic': false,
     'muxEnabled': false,
     'muxConcurrency': 8,
+    'muxXudpConcurrency': 16,
+    'muxQuicHandling': 'reject',
     'xrayLogLevel': 'warning',
     'fragmentEnabled': false,
     'fragmentPackets': 'tlshello',
@@ -2360,6 +2403,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'blockQuic',
     'muxEnabled',
     'muxConcurrency',
+    'muxXudpConcurrency',
+    'muxQuicHandling',
     'enableIpv6',
     'preferIpv6',
     'enableUdp',

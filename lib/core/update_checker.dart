@@ -4,6 +4,8 @@ import 'dart:io';
 const nirangRepositoryUrl = 'https://github.com/bardia-us/niraN';
 const nirangLatestReleaseApi =
     'https://api.github.com/repos/bardia-us/niraN/releases/latest';
+const nirangReleaseByTagApi =
+    'https://api.github.com/repos/bardia-us/niraN/releases/tags/';
 
 class SemanticVersion implements Comparable<SemanticVersion> {
   const SemanticVersion(this.major, this.minor, this.patch);
@@ -105,12 +107,32 @@ class GitHubUpdateChecker {
   const GitHubUpdateChecker();
 
   Future<ReleaseCheckResult> check(String currentVersion) async {
+    final payload = await _fetch(
+      Uri.parse(nirangLatestReleaseApi),
+      currentVersion,
+    );
+    return parseGitHubRelease(payload, currentVersion);
+  }
+
+  Future<BilingualReleaseNotes> releaseNotes(String version) async {
+    final tag = version.startsWith('v') ? version : 'v$version';
+    final payload = await _fetch(
+      Uri.parse('$nirangReleaseByTagApi${Uri.encodeComponent(tag)}'),
+      version,
+    );
+    return parseBilingualReleaseNotes('${payload['body'] ?? ''}');
+  }
+
+  Future<Map<String, dynamic>> _fetch(Uri uri, String currentVersion) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
-      final request = await client.getUrl(Uri.parse(nirangLatestReleaseApi));
+      final request = await client.getUrl(uri);
       request.headers
         ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
-        ..set(HttpHeaders.userAgentHeader, 'niraN-update-checker/0.3.5');
+        ..set(
+          HttpHeaders.userAgentHeader,
+          'niraN-update-checker/$currentVersion',
+        );
       final response = await request.close().timeout(
         const Duration(seconds: 10),
       );
@@ -126,60 +148,107 @@ class GitHubUpdateChecker {
       if (payload is! Map<String, dynamic>) {
         throw const FormatException('Invalid GitHub response');
       }
-      final latest = SemanticVersion.parse('${payload['tag_name'] ?? ''}');
-      final releaseUrl = Uri.tryParse('${payload['html_url'] ?? ''}');
-      if (releaseUrl == null ||
-          releaseUrl.scheme != 'https' ||
-          releaseUrl.host != 'github.com' ||
-          !releaseUrl.path.startsWith('/bardia-us/niraN/releases/')) {
-        throw const FormatException('Invalid release URL');
-      }
-      ReleaseAsset? portableAsset;
-      ReleaseAsset? setupAsset;
-      final assets = payload['assets'];
-      if (assets is List) {
-        for (final value in assets.whereType<Map>()) {
-          final name = '${value['name'] ?? ''}';
-          final package = ReleaseAsset.packageFromName(name);
-          if (package == null) continue;
-          final url = Uri.tryParse('${value['browser_download_url'] ?? ''}');
-          if (url == null ||
-              url.scheme != 'https' ||
-              !const {
-                'github.com',
-                'objects.githubusercontent.com',
-              }.contains(url.host)) {
-            continue;
-          }
-          final rawDigest = '${value['digest'] ?? ''}';
-          final digest = RegExp(
-            r'^sha256:([0-9a-fA-F]{64})$',
-          ).firstMatch(rawDigest)?.group(1)?.toLowerCase();
-          final asset = ReleaseAsset(
-            name: name,
-            url: url,
-            size: (value['size'] as num?)?.toInt() ?? 0,
-            sha256: digest,
-          );
-          if (asset.version?.compareTo(latest) != 0) continue;
-          switch (package) {
-            case WindowsUpdatePackage.portableZip:
-              portableAsset ??= asset;
-            case WindowsUpdatePackage.setupExe:
-              setupAsset ??= asset;
-          }
-        }
-      }
-      return ReleaseCheckResult(
-        latestVersion: latest,
-        releaseUrl: releaseUrl,
-        updateAvailable:
-            latest.compareTo(SemanticVersion.parse(currentVersion)) > 0,
-        portableAsset: portableAsset,
-        setupAsset: setupAsset,
-      );
+      return payload;
     } finally {
       client.close(force: true);
     }
   }
+}
+
+class BilingualReleaseNotes {
+  const BilingualReleaseNotes({required this.english, required this.persian});
+
+  final String english;
+  final String persian;
+
+  String forLanguage(String language) => language == 'fa'
+      ? (persian.isNotEmpty ? persian : english)
+      : (english.isNotEmpty ? english : persian);
+}
+
+BilingualReleaseNotes parseBilingualReleaseNotes(String body) {
+  final sections = <String, StringBuffer>{
+    'en': StringBuffer(),
+    'fa': StringBuffer(),
+  };
+  String? current;
+  for (final line in body.replaceAll('\r\n', '\n').split('\n')) {
+    final heading = line.trim().toLowerCase().replaceAll(
+      RegExp(r'[#:*_\s]'),
+      '',
+    );
+    if ({'english', 'en', 'انگلیسی'}.contains(heading)) {
+      current = 'en';
+      continue;
+    }
+    if ({'فارسی', 'persian', 'fa', 'farsi'}.contains(heading)) {
+      current = 'fa';
+      continue;
+    }
+    if (current != null) sections[current]!.writeln(line);
+  }
+  final english = sections['en']!.toString().trim();
+  final persian = sections['fa']!.toString().trim();
+  if (english.isEmpty && persian.isEmpty) {
+    return BilingualReleaseNotes(english: body.trim(), persian: '');
+  }
+  return BilingualReleaseNotes(english: english, persian: persian);
+}
+
+ReleaseCheckResult parseGitHubRelease(
+  Map<String, dynamic> payload,
+  String currentVersion,
+) {
+  final latest = SemanticVersion.parse('${payload['tag_name'] ?? ''}');
+  final releaseUrl = Uri.tryParse('${payload['html_url'] ?? ''}');
+  if (releaseUrl == null ||
+      releaseUrl.scheme != 'https' ||
+      releaseUrl.host != 'github.com' ||
+      !releaseUrl.path.startsWith('/bardia-us/niraN/releases/')) {
+    throw const FormatException('Invalid release URL');
+  }
+  ReleaseAsset? portableAsset;
+  ReleaseAsset? setupAsset;
+  final assets = payload['assets'];
+  if (assets is List) {
+    for (final value in assets.whereType<Map>()) {
+      final name = '${value['name'] ?? ''}';
+      final package = ReleaseAsset.packageFromName(name);
+      if (package == null) continue;
+      final url = Uri.tryParse('${value['browser_download_url'] ?? ''}');
+      if (url == null ||
+          url.scheme != 'https' ||
+          !const {
+            'github.com',
+            'objects.githubusercontent.com',
+          }.contains(url.host)) {
+        continue;
+      }
+      final rawDigest = '${value['digest'] ?? ''}';
+      final digest = RegExp(
+        r'^sha256:([0-9a-fA-F]{64})$',
+      ).firstMatch(rawDigest)?.group(1)?.toLowerCase();
+      final asset = ReleaseAsset(
+        name: name,
+        url: url,
+        size: (value['size'] as num?)?.toInt() ?? 0,
+        sha256: digest,
+      );
+      if (asset.version?.compareTo(latest) != 0) continue;
+      switch (package) {
+        case WindowsUpdatePackage.portableZip:
+          portableAsset ??= asset;
+        case WindowsUpdatePackage.setupExe:
+          setupAsset ??= asset;
+      }
+    }
+  }
+  return ReleaseCheckResult(
+    latestVersion: latest,
+    releaseUrl: releaseUrl,
+    updateAvailable:
+        latest.compareTo(SemanticVersion.parse(currentVersion)) > 0,
+    portableAsset: portableAsset,
+    setupAsset: setupAsset,
+  );
 }

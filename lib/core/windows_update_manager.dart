@@ -732,7 +732,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
       _request = request;
       request
         ..followRedirects = false
-        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-updater/0.3.5');
+        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-updater/0.3.6');
       if (existing > 0) {
         request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existing-');
       }

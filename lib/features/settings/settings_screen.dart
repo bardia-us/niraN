@@ -100,7 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.5',
+          appVersion: app?.appVersion ?? '0.3.6',
         );
       }),
     );
@@ -648,6 +648,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   }),
                 ),
               ),
+            if (settings.muxEnabled)
+              ListTile(
+                leading: const Icon(Icons.hub_outlined),
+                title: Text(context.s('muxXudpConcurrency')),
+                subtitle: Text(
+                  '${settings.muxXudpConcurrency} · ${context.s('muxXudpConcurrencyHint')}',
+                ),
+                onTap: () async {
+                  final value = await _promptSingleValue(
+                    context,
+                    title: context.s('muxXudpConcurrency'),
+                    initial: '${settings.muxXudpConcurrency}',
+                    keyboardType: TextInputType.number,
+                    validator: (value) {
+                      final parsed = int.tryParse(value);
+                      return parsed != null && parsed >= 1 && parsed <= 1024
+                          ? null
+                          : context.s('muxXudpConcurrencyHint');
+                    },
+                  );
+                  if (value != null && context.mounted) {
+                    await _perform(
+                      context,
+                      () => controller.updateSettings({
+                        'muxXudpConcurrency': int.parse(value),
+                      }),
+                    );
+                  }
+                },
+              ),
+            if (settings.muxEnabled)
+              ListTile(
+                leading: const Icon(Icons.network_check_rounded),
+                title: Text(context.s('muxQuicHandling')),
+                subtitle: Text(context.s('muxQuic${settings.muxQuicHandling}')),
+                onTap: () => _chooseValue(
+                  context,
+                  title: context.s('muxQuicHandling'),
+                  current: settings.muxQuicHandling,
+                  values: {
+                    'reject': context.s('muxQuicreject'),
+                    'allow': context.s('muxQuicallow'),
+                    'skip': context.s('muxQuicskip'),
+                  },
+                  onSelected: (value) =>
+                      controller.updateSettings({'muxQuicHandling': value}),
+                ),
+              ),
           ],
         ),
         _SettingsGroup(
@@ -862,8 +910,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => _showAbout(context, app.coreVersion, app.appVersion),
             ),
             ListTile(
-              leading: const Icon(Icons.settings_backup_restore_rounded),
-              title: Text(context.s('resetSettings')),
+              leading: Icon(
+                Icons.settings_backup_restore_rounded,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: Text(
+                context.s('resetSettings'),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
               onTap: () => _confirmResetSettings(context, controller),
             ),
           ],
@@ -886,7 +940,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => NirangAlertDialog(
-        icon: const Icon(Icons.settings_backup_restore_rounded),
+        icon: Icon(
+          Icons.settings_backup_restore_rounded,
+          color: Theme.of(context).colorScheme.error,
+        ),
         title: Text(context.s('resetSettings')),
         content: Text(context.s('resetSettingsBody')),
         actions: [
@@ -895,6 +952,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Text(context.s('cancel')),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: Text(context.s('resetSettings')),
           ),
@@ -1285,11 +1346,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     applicationIcon: ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Image.asset(
-        'assets/branding/nirang-logo-concept.png',
+        'assets/branding/nirang-mark.png',
+        filterQuality: FilterQuality.high,
         width: 54,
         height: 54,
-        cacheWidth: 108,
-        cacheHeight: 108,
+        semanticLabel: 'niraN',
       ),
     ),
     children: [

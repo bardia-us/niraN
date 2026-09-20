@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import '../../core/registration/device_registration.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/platform/nirang_native.dart';
+import '../../core/update_checker.dart';
+import '../../core/windows_update_manager.dart';
+import '../../platform/windows/windows_device_registration.dart';
+import '../../platform/windows/windows_native_host.dart';
 import '../../platform/windows/windows_remote_access.dart';
 
 class NiranRegistrationBootstrap extends StatefulWidget {
@@ -58,6 +62,12 @@ class _NiranRegistrationBootstrapState
         return _consentApp(
           _isBlocked(error)
               ? BlockedAccessScreen(onRetry: _retry, onExit: _exit)
+              : _isUpdateRequired(error)
+              ? MandatoryWindowsUpdateScreen(
+                  minimumVersion: _minimumVersion(error),
+                  onRetry: _retry,
+                  onExit: _exit,
+                )
               : AccessVerificationScreen(
                   message: _errorMessage(error),
                   onRetry: _retry,
@@ -78,7 +88,20 @@ class _NiranRegistrationBootstrapState
 
   Future<bool> _verifyAccess() async {
     final accepted = await widget.coordinator.initialize();
-    if (accepted) clearDeviceAccessBlocked();
+    if (accepted) {
+      clearDeviceAccessBlocked();
+      final coordinator = widget.coordinator;
+      if (coordinator is RemoteAccessController) {
+        try {
+          await (coordinator as RemoteAccessController).requireAllowed();
+        } on DeviceAccessException {
+          rethrow;
+        } on Object {
+          // A temporary network/DNS/timeout failure must not create a false
+          // mandatory-update lock. Cached allowed access remains usable.
+        }
+      }
+    }
     return accepted;
   }
 
@@ -140,9 +163,214 @@ class _NiranRegistrationBootstrapState
       error is DeviceAccessException &&
       error.reason == 'blocked_by_administrator';
 
+  static bool _isUpdateRequired(Object? error) =>
+      error is DeviceAccessException && error.reason == 'update_required';
+
+  static String _minimumVersion(Object? error) {
+    final message = error is DeviceAccessException ? error.message : '';
+    return RegExp(r'\d+\.\d+\.\d+').firstMatch(message)?.group(0) ?? '0.3.6';
+  }
+
   static String _errorMessage(Object? error) => error is DeviceAccessException
       ? error.message
       : 'Access status could not be verified. Check your connection and try again.';
+}
+
+class MandatoryWindowsUpdateScreen extends StatefulWidget {
+  const MandatoryWindowsUpdateScreen({
+    required this.minimumVersion,
+    required this.onRetry,
+    required this.onExit,
+    super.key,
+  });
+
+  final String minimumVersion;
+  final VoidCallback onRetry;
+  final VoidCallback onExit;
+
+  @override
+  State<MandatoryWindowsUpdateScreen> createState() =>
+      _MandatoryWindowsUpdateScreenState();
+}
+
+class _MandatoryWindowsUpdateScreenState
+    extends State<MandatoryWindowsUpdateScreen> {
+  final _manager = WindowsUpdateManager.instance;
+  ReleaseCheckResult? _release;
+  ReleaseAsset? _asset;
+  String? _error;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  Future<void> _prepare() async {
+    try {
+      final info = await WindowsDeviceRegistrationInfoProvider().read();
+      await _manager.initialize(info.appVersion);
+      final release = await const GitHubUpdateChecker().check(info.appVersion);
+      final asset = await _manager.assetFor(release);
+      if (!mounted) return;
+      setState(() {
+        _release = release;
+        _asset = asset;
+        _loading = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _error =
+            'Could not load the verified Windows update. Check your internet connection or use the browser download.';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _download() async {
+    final release = _release;
+    final asset = _asset;
+    if (release == null || asset == null || asset.sha256 == null) return;
+    try {
+      await _manager.start(asset, release.latestVersion);
+    } on Object {
+      if (mounted) {
+        setState(
+          () => _error = 'The verified update download could not start.',
+        );
+      }
+    }
+  }
+
+  Future<void> _install() async {
+    try {
+      final mustExit = await _manager.launch();
+      if (mustExit) await MethodChannelWindowsNativeHost().exitApplication();
+    } on Object {
+      if (mounted) {
+        setState(() => _error = 'The update installer could not be started.');
+      }
+    }
+  }
+
+  Future<void> _openBrowser() async {
+    final uri =
+        _asset?.url ?? _release?.releaseUrl ?? Uri.parse(nirangRepositoryUrl);
+    await MethodChannelWindowsNativeHost().openExternalUrl(uri.toString());
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(30),
+              child: AnimatedBuilder(
+                animation: _manager,
+                builder: (context, _) {
+                  final download = _manager.snapshot;
+                  final ready =
+                      download.status == UpdateDownloadStatus.readyToUpdate ||
+                      download.status == UpdateDownloadStatus.updateFailed;
+                  final active =
+                      download.status == UpdateDownloadStatus.downloading ||
+                      download.status == UpdateDownloadStatus.verifying ||
+                      download.status == UpdateDownloadStatus.downloaded;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.system_update_rounded, size: 52),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Update required',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'niraN ${widget.minimumVersion} or newer is required.\n'
+                        'برای ادامه، niraN را به نسخهٔ ${widget.minimumVersion} یا جدیدتر به‌روزرسانی کنید.',
+                        textAlign: TextAlign.center,
+                      ),
+                      if (_loading) ...[
+                        const SizedBox(height: 22),
+                        const CircularProgressIndicator(),
+                      ],
+                      if (active || ready) ...[
+                        const SizedBox(height: 22),
+                        LinearProgressIndicator(value: download.progress),
+                        const SizedBox(height: 8),
+                        Text(
+                          ready
+                              ? 'Verified and ready to install'
+                              : '${_formatMegabytes(download.received)} / ${_formatMegabytes(download.total)}',
+                        ),
+                      ],
+                      if (_error case final error?) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          error,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          TextButton(
+                            onPressed: widget.onExit,
+                            child: const Text('Exit'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: widget.onRetry,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('Retry policy'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _release == null ? null : _openBrowser,
+                            icon: const Icon(Icons.open_in_browser_rounded),
+                            label: const Text('Browser'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: ready
+                                ? _install
+                                : active || _asset?.sha256 == null
+                                ? null
+                                : _download,
+                            icon: Icon(
+                              ready
+                                  ? Icons.install_desktop_rounded
+                                  : Icons.download_rounded,
+                            ),
+                            label: Text(
+                              ready ? 'Install' : 'Download & verify',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  static String _formatMegabytes(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 class BlockedAccessScreen extends StatelessWidget {

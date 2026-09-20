@@ -344,6 +344,10 @@ final class WindowsXrayConfigBuilder {
     return {
       'enabled': enabled,
       if (enabled) 'concurrency': _integer(settings, 'muxConcurrency', 8),
+      if (enabled)
+        'xudpConcurrency': _integer(settings, 'muxXudpConcurrency', 16),
+      if (enabled)
+        'xudpProxyUDP443': '${settings['muxQuicHandling'] ?? 'reject'}',
     };
   }
 

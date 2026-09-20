@@ -41,6 +41,46 @@ function require_exact_fields(array $payload, array $required): void
     }
 }
 
+function enforce_request_security(PDO $pdo, array $payload, string $deviceKey, string $action): void
+{
+    $timestamp = $payload['request_timestamp'] ?? null;
+    $nonce = $payload['request_nonce'] ?? null;
+    if (!is_int($timestamp) || abs(time() - $timestamp) > 300 ||
+        !is_string($nonce) || preg_match('/^[A-Za-z0-9_-]{22}$/', $nonce) !== 1) {
+        respond(400, ['ok' => false, 'error' => 'stale_or_invalid_request']);
+    }
+
+    $pdo->prepare('DELETE FROM api_nonces WHERE expires_at < :now')->execute([':now' => time()]);
+    try {
+        $nonceInsert = $pdo->prepare('INSERT INTO api_nonces (nonce_hash, expires_at) VALUES (:hash, :expires)');
+        $nonceInsert->execute([
+            ':hash' => hash('sha256', $deviceKey . "\0" . $nonce),
+            ':expires' => time() + 600,
+        ]);
+    } catch (PDOException $exception) {
+        if ((string)$exception->getCode() === '23000') {
+            respond(409, ['ok' => false, 'error' => 'replayed_request']);
+        }
+        throw $exception;
+    }
+
+    $window = intdiv(time(), 60) * 60;
+    $pdo->prepare('DELETE FROM api_rate_limits WHERE window_start < :cutoff')->execute([':cutoff' => $window - 3600]);
+    $bucketKey = hash('sha256', $deviceKey . "\0" . $action . "\0" . ($_SERVER['REMOTE_ADDR'] ?? ''));
+    $limit = $action === 'subscription' ? 12 : ($action === 'register' ? 8 : 30);
+    $rate = $pdo->prepare(
+        'INSERT INTO api_rate_limits (bucket_key, window_start, request_count) VALUES (:key, :window, 1)
+         ON CONFLICT(bucket_key, window_start) DO UPDATE SET request_count = request_count + 1'
+    );
+    $rate->execute([':key' => $bucketKey, ':window' => $window]);
+    $count = $pdo->prepare('SELECT request_count FROM api_rate_limits WHERE bucket_key = :key AND window_start = :window');
+    $count->execute([':key' => $bucketKey, ':window' => $window]);
+    if ((int)$count->fetchColumn() > $limit) {
+        header('Retry-After: 60');
+        respond(429, ['ok' => false, 'error' => 'rate_limited']);
+    }
+}
+
 function parse_timestamp($value): ?string
 {
     $value = valid_text($value, 40);
@@ -69,6 +109,7 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
                     windows_username = :windows_username, windows_version = :windows_version,
                     platform = :platform, manufacturer = :manufacturer, model = :model,
                     os_version = :os_version, app_name = :app_name, app_version = :app_version,
+                    app_build = :app_build,
                     last_seen = :last_seen, updated_at = :updated_at,
                     access_token_hash = COALESCE(:access_token_hash, access_token_hash),
                     reinstalled_after_block = MAX(reinstalled_after_block, :reinstalled_after_block),
@@ -84,6 +125,7 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
                 ':platform' => $record['platform'], ':manufacturer' => $record['manufacturer'],
                 ':model' => $record['model'], ':os_version' => $record['os_version'],
                 ':app_name' => $record['app_name'], ':app_version' => $record['app_version'],
+                ':app_build' => $record['app_build'],
                 ':last_seen' => $record['last_seen'], ':updated_at' => registry_now(),
                 ':access_token_hash' => $tokenHash,
                 ':reinstalled_after_block' => $reinstalledAfterBlock ? 1 : 0,
@@ -97,13 +139,13 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
     $statement = $pdo->prepare(
         'INSERT INTO installations (
             installation_id, device_model, device_name, windows_username, windows_version,
-            platform, manufacturer, model, os_version, app_name, app_version,
+            platform, manufacturer, model, os_version, app_name, app_version, app_build,
             first_seen, last_seen, created_at, updated_at, device_key,
             access_token_hash, reinstalled_after_block, bypass_attempts, last_access_status
             , schema_version
          ) VALUES (
             :installation_id, :device_model, :device_name, :windows_username, :windows_version,
-            :platform, :manufacturer, :model, :os_version, :app_name, :app_version,
+            :platform, :manufacturer, :model, :os_version, :app_name, :app_version, :app_build,
             :first_seen, :last_seen, :created_at, :updated_at, :device_key,
             :access_token_hash, :reinstalled_after_block, :bypass_attempts, :last_access_status
             , :schema_version
@@ -112,6 +154,7 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
             windows_username = excluded.windows_username, windows_version = excluded.windows_version,
             platform = excluded.platform, manufacturer = excluded.manufacturer, model = excluded.model,
             os_version = excluded.os_version, app_name = excluded.app_name, app_version = excluded.app_version,
+            app_build = excluded.app_build,
             last_seen = excluded.last_seen, updated_at = excluded.updated_at, device_key = excluded.device_key,
             access_token_hash = COALESCE(excluded.access_token_hash, installations.access_token_hash),
             reinstalled_after_block = MAX(installations.reinstalled_after_block, excluded.reinstalled_after_block),
@@ -125,7 +168,7 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
         ':windows_version' => $record['windows_version'], ':platform' => $record['platform'],
         ':manufacturer' => $record['manufacturer'], ':model' => $record['model'],
         ':os_version' => $record['os_version'], ':app_name' => $record['app_name'],
-        ':app_version' => $record['app_version'], ':first_seen' => $record['first_seen'],
+        ':app_version' => $record['app_version'], ':app_build' => $record['app_build'], ':first_seen' => $record['first_seen'],
         ':last_seen' => $record['last_seen'], ':created_at' => registry_now(), ':updated_at' => registry_now(),
         ':device_key' => $record['device_key'], ':access_token_hash' => $tokenHash,
         ':reinstalled_after_block' => $reinstalledAfterBlock ? 1 : 0,
@@ -137,7 +180,11 @@ function upsert_registration(PDO $pdo, array $record, ?string $tokenHash, bool $
 
 function handle_registration(PDO $pdo, array $payload, int $schema): void
 {
-    $fields = $schema === 5
+    $fields = $schema === 7
+        ? ['action', 'schema_version', 'platform', 'installation_id', 'device_key', 'device_name', 'manufacturer', 'model', 'os_version', 'app_name', 'app_version', 'app_build', 'first_seen', 'last_seen', 'request_timestamp', 'request_nonce']
+        : ($schema === 6
+        ? ['action', 'schema_version', 'platform', 'installation_id', 'device_key', 'device_name', 'manufacturer', 'model', 'os_version', 'app_name', 'app_version', 'first_seen', 'last_seen', 'request_timestamp', 'request_nonce']
+        : ($schema === 5
         ? ['action', 'schema_version', 'platform', 'installation_id', 'device_key', 'device_name', 'windows_username', 'windows_version', 'app_name', 'app_version', 'first_seen', 'last_seen']
         : ($schema === 4
         ? ['action', 'schema_version', 'platform', 'installation_id', 'device_key', 'device_name', 'manufacturer', 'model', 'os_version', 'app_name', 'app_version', 'first_seen', 'last_seen']
@@ -145,7 +192,7 @@ function handle_registration(PDO $pdo, array $payload, int $schema): void
             ? ['schema_version', 'platform', 'installation_id', 'device_name', 'manufacturer', 'model', 'os_version', 'app_name', 'app_version', 'first_seen', 'last_seen']
             : ($schema === 2
                 ? ['schema_version', 'installation_id', 'device_name', 'windows_username', 'windows_version', 'app_version', 'first_seen', 'last_seen']
-                : ['schema_version', 'installation_id', 'device_model', 'windows_version', 'app_version', 'first_seen', 'last_seen'])));
+                : ['schema_version', 'installation_id', 'device_model', 'windows_version', 'app_version', 'first_seen', 'last_seen'])))));
     require_exact_fields($payload, $fields);
     $installationId = valid_installation_id($payload['installation_id'] ?? null);
     $version = registry_valid_version($payload['app_version'] ?? null);
@@ -155,9 +202,12 @@ function handle_registration(PDO $pdo, array $payload, int $schema): void
     if ($installationId === null || $version === null || $firstSeen === null || $lastSeen === null || ($schema >= 4 && $deviceKey === null)) {
         respond(422, ['ok' => false, 'error' => 'validation_failed']);
     }
-    $android = $schema === 3 || $schema === 4;
+    $android = in_array($schema, [3, 4, 6, 7], true);
     $platform = $android ? 'android' : 'windows';
-    $minimum = registry_minimum_version($pdo, $platform);
+    $minimum = registry_minimum_update_version($pdo, $platform);
+    $minimumBuild = $android ? registry_minimum_android_build($pdo) : 0;
+    $appBuild = $schema === 7 ? registry_valid_build($payload['app_build'] ?? null) : ($android ? 0 : null);
+    if ($schema === 7 && $appBuild === null) respond(422, ['ok' => false, 'error' => 'validation_failed']);
     $record = [
         'installation_id' => $installationId,
         'device_model' => $schema === 1 ? valid_text($payload['device_model'] ?? null, 160) : '',
@@ -169,7 +219,8 @@ function handle_registration(PDO $pdo, array $payload, int $schema): void
         'model' => $android ? valid_text($payload['model'] ?? null, 160) : '',
         'os_version' => $android ? valid_text($payload['os_version'] ?? null, 160) : valid_text($payload['windows_version'] ?? null, 160),
         'app_name' => $schema >= 3 ? valid_text($payload['app_name'] ?? null, 32) : 'niraN',
-        'app_version' => $version, 'first_seen' => $firstSeen, 'last_seen' => $lastSeen,
+        'app_version' => $version, 'app_build' => $appBuild ?? 0,
+        'first_seen' => $firstSeen, 'last_seen' => $lastSeen,
         'device_key' => $deviceKey, 'last_access_status' => 'unknown', 'schema_version' => $schema,
     ];
     foreach (['device_model', 'device_name', 'windows_username', 'windows_version', 'platform', 'manufacturer', 'model', 'os_version', 'app_name'] as $field) {
@@ -181,12 +232,13 @@ function handle_registration(PDO $pdo, array $payload, int $schema): void
     if (!$android && ($record['platform'] !== 'windows' || $record['app_name'] !== 'niraN')) {
         respond(422, ['ok' => false, 'error' => 'validation_failed']);
     }
+    if ($schema === 6 || $schema === 7) enforce_request_security($pdo, $payload, $deviceKey, 'register');
 
-    $outdated = registry_is_outdated($version, $minimum);
+    $outdated = $android ? ($appBuild < $minimumBuild) : registry_is_outdated($version, $minimum);
     if ($deviceKey === null) {
         $record['last_access_status'] = 'outdated';
         upsert_registration($pdo, $record, null, false);
-        respond(426, registry_access_payload(false, false, $minimum, true, 'remote_control_unavailable'));
+        respond(426, registry_access_payload(false, false, $minimum, true, 'remote_control_unavailable', $minimumBuild));
     }
 
     $pdo->beginTransaction();
@@ -207,25 +259,38 @@ function handle_registration(PDO $pdo, array $payload, int $schema): void
         }
         $prior = $pdo->prepare('SELECT 1 FROM installations WHERE device_key = :device_key AND installation_id <> :installation_id LIMIT 1');
         $prior->execute([':device_key' => $deviceKey, ':installation_id' => $installationId]);
-        $decision = registry_access_state($version, $minimum, (string)$keyRecord['access_status'], $prior->fetchColumn() !== false);
+        $decision = registry_access_state(
+            $version,
+            $minimum,
+            (string)$keyRecord['access_status'],
+            $prior->fetchColumn() !== false,
+            $android ? $appBuild : null,
+            $minimumBuild
+        );
         $blocked = $decision['blocked'];
         $reinstallAfterBlock = $decision['reinstalled_after_block'];
         $token = !$blocked && !$outdated ? rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=') : null;
         $record['last_access_status'] = $decision['status'];
         upsert_registration($pdo, $record, $token === null ? null : registry_token_hash($token), $reinstallAfterBlock);
+        if ($token !== null) {
+            $expiresAt = (new DateTimeImmutable('+24 hours', new DateTimeZone('UTC')))->format(DateTimeInterface::ATOM);
+            $expiry = $pdo->prepare('UPDATE installations SET access_token_expires_at = :expires WHERE device_key = :device_key');
+            $expiry->execute([':expires' => $expiresAt, ':device_key' => $deviceKey]);
+        }
         $pdo->commit();
     } catch (Throwable $exception) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $exception;
     }
     if ($blocked) {
-        respond(403, registry_access_payload(false, true, $minimum, false, $keyRecord['reason'] !== '' ? $keyRecord['reason'] : 'blocked_by_administrator'));
+        respond(403, registry_access_payload(false, true, $minimum, false, $keyRecord['reason'] !== '' ? $keyRecord['reason'] : 'blocked_by_administrator', $minimumBuild));
     }
-    if ($outdated) respond(426, registry_access_payload(false, false, $minimum, true, 'update_required'));
-    $response = registry_access_payload(true, false, $minimum, false, 'allowed');
+    if ($outdated) respond(426, registry_access_payload(false, false, $minimum, true, 'update_required', $minimumBuild));
+    $response = registry_access_payload(true, false, $minimum, false, 'allowed', $minimumBuild);
     $response['schema_version'] = $schema;
     $response['platform'] = $platform;
     $response['access_token'] = $token;
+    $response['expires_in'] = 86400;
     respond(200, $response);
 }
 
@@ -234,6 +299,14 @@ function authenticate_device(PDO $pdo, array $payload): array
     $schema = $payload['schema_version'] ?? null;
     if ($schema === 4) {
         require_exact_fields($payload, ['action', 'schema_version', 'installation_id', 'device_key', 'app_version']);
+        $expectedPlatform = 'android';
+        $expectedApp = 'niraNG';
+    } elseif ($schema === 6) {
+        require_exact_fields($payload, ['action', 'schema_version', 'installation_id', 'device_key', 'app_version', 'request_timestamp', 'request_nonce']);
+        $expectedPlatform = 'android';
+        $expectedApp = 'niraNG';
+    } elseif ($schema === 7) {
+        require_exact_fields($payload, ['action', 'schema_version', 'installation_id', 'device_key', 'app_version', 'app_build', 'request_timestamp', 'request_nonce']);
         $expectedPlatform = 'android';
         $expectedApp = 'niraNG';
     } elseif ($schema === 5) {
@@ -246,16 +319,19 @@ function authenticate_device(PDO $pdo, array $payload): array
     } else {
         respond(400, ['ok' => false, 'error' => 'unsupported_schema']);
     }
-    $minimum = registry_minimum_version($pdo, $expectedPlatform);
+    $minimum = registry_minimum_update_version($pdo, $expectedPlatform);
+    $minimumBuild = $expectedPlatform === 'android' ? registry_minimum_android_build($pdo) : 0;
     $installationId = valid_installation_id($payload['installation_id'] ?? null);
     $deviceKey = valid_device_key($payload['device_key'] ?? null);
     $version = registry_valid_version($payload['app_version'] ?? null);
+    $appBuild = $schema === 7 ? registry_valid_build($payload['app_build'] ?? null) : ($expectedPlatform === 'android' ? 0 : null);
     $token = registry_bearer_token();
-    if ($installationId === null || $deviceKey === null || $version === null || $token === null) {
-        respond(401, registry_access_payload(false, false, $minimum, false, 'invalid_device_credentials'));
+    if ($installationId === null || $deviceKey === null || $version === null || $token === null || ($schema === 7 && $appBuild === null)) {
+        respond(401, registry_access_payload(false, false, $minimum, false, 'invalid_device_credentials', $minimumBuild));
     }
+    if ($schema === 6 || $schema === 7) enforce_request_security($pdo, $payload, $deviceKey, (string)$payload['action']);
     $statement = $pdo->prepare(
-        'SELECT d.access_status, d.reason, i.platform, i.app_name, i.schema_version
+        'SELECT d.access_status, d.reason, i.platform, i.app_name, i.schema_version, i.access_token_expires_at
          FROM installations i JOIN device_keys d ON d.device_key = i.device_key
          WHERE i.installation_id = :installation_id AND i.device_key = :device_key
            AND i.access_token_hash = :token_hash LIMIT 1'
@@ -263,20 +339,30 @@ function authenticate_device(PDO $pdo, array $payload): array
     $statement->execute([':installation_id' => $installationId, ':device_key' => $deviceKey, ':token_hash' => registry_token_hash($token)]);
     $device = $statement->fetch();
     if (!is_array($device) || $device['platform'] !== $expectedPlatform || $device['app_name'] !== $expectedApp || (int)$device['schema_version'] !== $schema) {
-        respond(401, registry_access_payload(false, false, $minimum, false, 'invalid_device_credentials'));
+        respond(401, registry_access_payload(false, false, $minimum, false, 'invalid_device_credentials', $minimumBuild));
     }
-    $decision = registry_access_state($version, $minimum, (string)$device['access_status'], false);
+    if (($schema === 6 || $schema === 7) && (!is_string($device['access_token_expires_at']) || strtotime($device['access_token_expires_at']) <= time())) {
+        respond(401, registry_access_payload(false, false, $minimum, false, 'token_expired', $minimumBuild));
+    }
+    $decision = registry_access_state(
+        $version,
+        $minimum,
+        (string)$device['access_status'],
+        false,
+        $expectedPlatform === 'android' ? $appBuild : null,
+        $minimumBuild
+    );
     $outdated = $decision['outdated'];
     $blocked = $decision['blocked'];
     $status = $decision['status'];
     $touch = $pdo->prepare(
-        'UPDATE installations SET app_version = :app_version, last_seen = :last_seen, updated_at = :updated_at,
+        'UPDATE installations SET app_version = :app_version, app_build = :app_build, last_seen = :last_seen, updated_at = :updated_at,
          last_access_status = :status WHERE installation_id = :installation_id'
     );
-    $touch->execute([':app_version' => $version, ':last_seen' => registry_now(), ':updated_at' => registry_now(), ':status' => $status, ':installation_id' => $installationId]);
-    if ($blocked) respond(403, registry_access_payload(false, true, $minimum, false, $device['reason'] !== '' ? $device['reason'] : 'blocked_by_administrator'));
-    if ($outdated) respond(426, registry_access_payload(false, false, $minimum, true, 'update_required'));
-    return ['minimum' => $minimum, 'platform' => $expectedPlatform];
+    $touch->execute([':app_version' => $version, ':app_build' => $appBuild ?? 0, ':last_seen' => registry_now(), ':updated_at' => registry_now(), ':status' => $status, ':installation_id' => $installationId]);
+    if ($blocked) respond(403, registry_access_payload(false, true, $minimum, false, $device['reason'] !== '' ? $device['reason'] : 'blocked_by_administrator', $minimumBuild));
+    if ($outdated) respond(426, registry_access_payload(false, false, $minimum, true, 'update_required', $minimumBuild));
+    return ['minimum' => $minimum, 'minimum_build' => $minimumBuild, 'platform' => $expectedPlatform];
 }
 
 function proxy_subscription(PDO $pdo, array $payload): void
@@ -306,7 +392,7 @@ function proxy_subscription(PDO $pdo, array $payload): void
         CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_TIMEOUT => 20, CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_HTTPHEADER => $requestHeaders,
-        CURLOPT_USERAGENT => $access['platform'] === 'windows' ? 'niraN-registry/0.3.4' : 'niraNG-registry/1.1.5',
+        CURLOPT_USERAGENT => $access['platform'] === 'windows' ? 'niraN-registry/0.3.4' : 'niraNG-registry/1.1.6',
         CURLOPT_HEADERFUNCTION => static function ($handle, string $line) use (&$forwardHeaders): int {
             $parts = explode(':', $line, 2);
             if (count($parts) === 2) {
@@ -351,11 +437,11 @@ try {
     $pdo = registry_database();
     $schema = $payload['schema_version'] ?? null;
     $action = $payload['action'] ?? 'register';
-    if (!is_int($schema) || !in_array($schema, [1, 2, 3, 4, 5], true)) respond(400, ['ok' => false, 'error' => 'unsupported_schema']);
+    if (!is_int($schema) || !in_array($schema, [1, 2, 3, 4, 5, 6, 7], true)) respond(400, ['ok' => false, 'error' => 'unsupported_schema']);
     if ($action === 'register') handle_registration($pdo, $payload, $schema);
     if ($action === 'status') {
         $access = authenticate_device($pdo, $payload);
-        respond(200, registry_access_payload(true, false, $access['minimum'], false, 'allowed'));
+        respond(200, registry_access_payload(true, false, $access['minimum'], false, 'allowed', $access['minimum_build']));
     }
     if ($action === 'subscription') proxy_subscription($pdo, $payload);
     respond(400, ['ok' => false, 'error' => 'unsupported_action']);

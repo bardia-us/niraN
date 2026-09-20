@@ -339,6 +339,7 @@ final class WindowsSubscriptionParser {
     final actualTransport = transport.trim().isEmpty ? 'tcp' : transport;
     final record = WindowsServerRecord(
       id: _semanticId(
+        name,
         protocol,
         address,
         port,
@@ -365,6 +366,7 @@ final class WindowsSubscriptionParser {
   }
 
   String _semanticId(
+    String name,
     String protocol,
     String address,
     int port,
@@ -380,6 +382,11 @@ final class WindowsSubscriptionParser {
             .toList()
           ..sort();
     final identity = jsonEncode({
+      // The display name is part of the user's subscription data. Two
+      // otherwise identical endpoints with different names are intentional
+      // entries and must both remain visible. Exact duplicates still share
+      // the same deterministic id and are removed by putIfAbsent.
+      'name': name.trim(),
       'protocol': protocol.toLowerCase(),
       'address': address.trim().toLowerCase(),
       'port': port,

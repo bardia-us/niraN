@@ -180,9 +180,11 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     _set((value) => value.copyWith(isPinging: true));
     try {
       await NirangNative.pingServer(id);
-    } catch (_) {
+    } finally {
+      // The native future completes only after the latency operation has
+      // finished. Do not rely solely on the optional completion event: event
+      // delivery can be interrupted while the operation itself succeeds.
       _set((value) => value.copyWith(isPinging: false));
-      rethrow;
     }
   }
 
@@ -203,9 +205,10 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     _set((value) => value.copyWith(isPinging: true));
     try {
       await NirangNative.pingAll();
-    } catch (_) {
+    } finally {
+      // Always release the UI latch on success, cancellation, timeout, or
+      // error, including the case where pingCompleted is never delivered.
       _set((value) => value.copyWith(isPinging: false));
-      rethrow;
     }
   }
 
@@ -441,7 +444,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     logs: _logs(map['logs'] as List<dynamic>? ?? const []),
     lastUpdated: _number(map['lastUpdated']),
     coreVersion: '${map['coreVersion'] ?? 'Unavailable'}',
-    appVersion: '${map['appVersion'] ?? '0.3.5'}',
+    appVersion: '${map['appVersion'] ?? '0.3.6'}',
     subscriptionConfigured: map['subscriptionConfigured'] == true,
     telegramEligible: map['telegramEligible'] == true,
     subscriptionError: map['subscriptionError']?.toString(),
@@ -471,6 +474,8 @@ const _networkSettingKeys = <String>{
   'blockQuic',
   'muxEnabled',
   'muxConcurrency',
+  'muxXudpConcurrency',
+  'muxQuicHandling',
   'enableIpv6',
   'preferIpv6',
   'enableUdp',

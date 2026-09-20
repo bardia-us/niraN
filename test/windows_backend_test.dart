@@ -742,6 +742,8 @@ void main() {
       expect(migrated['blockQuic'], isFalse);
       expect(migrated['muxEnabled'], isFalse);
       expect(migrated['muxConcurrency'], 8);
+      expect(migrated['muxXudpConcurrency'], 16);
+      expect(migrated['muxQuicHandling'], 'reject');
 
       final preserved = await loadWith({
         'routingMode': 'global',
@@ -752,6 +754,8 @@ void main() {
         'blockQuic': true,
         'muxEnabled': true,
         'muxConcurrency': 16,
+        'muxXudpConcurrency': 64,
+        'muxQuicHandling': 'allow',
       });
       expect(preserved['directDnsEnabled'], isTrue);
       expect(preserved['directDnsAddress'], '9.9.9.9');
@@ -760,6 +764,8 @@ void main() {
       expect(preserved['blockQuic'], isTrue);
       expect(preserved['muxEnabled'], isTrue);
       expect(preserved['muxConcurrency'], 16);
+      expect(preserved['muxXudpConcurrency'], 64);
+      expect(preserved['muxQuicHandling'], 'allow');
     },
   );
 
@@ -1196,6 +1202,8 @@ void main() {
       expect((xrayConfig['outbounds'] as List).first['mux'], {
         'enabled': true,
         'concurrency': 16,
+        'xudpConcurrency': 16,
+        'xudpProxyUDP443': 'reject',
       });
 
       await backend.restartService();
