@@ -19,12 +19,14 @@ class GlassSurface extends ConsumerWidget {
     this.padding,
     this.radius = 16,
     this.blur = 9,
+    this.overlayColor,
   });
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final double radius;
   final double blur;
+  final Color? overlayColor;
 
   static List<double> _saturationMatrix(double saturation) {
     const lumR = .299;
@@ -64,9 +66,12 @@ class GlassSurface extends ConsumerWidget {
     final content = Padding(padding: padding ?? EdgeInsets.zero, child: child);
 
     if (reducedEffects) {
+      final opaqueSurface = overlayColor == null
+          ? scheme.surfaceContainerHigh
+          : Color.alphaBlend(overlayColor!, scheme.surfaceContainerHigh);
       return DecoratedBox(
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
+          color: opaqueSurface,
           border: Border.all(color: scheme.outlineVariant),
           borderRadius: borderRadius,
         ),
@@ -118,6 +123,8 @@ class GlassSurface extends ConsumerWidget {
                 ),
               ),
             ),
+            if (overlayColor case final color?)
+              Positioned.fill(child: ColoredBox(color: color)),
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(

@@ -12,6 +12,7 @@ class InteractiveDepth extends StatefulWidget {
     this.pressEnabled = true,
     this.reducedEffects = false,
     this.radius = 14,
+    this.tiltEnabled = true,
   });
 
   final Widget child;
@@ -19,6 +20,7 @@ class InteractiveDepth extends StatefulWidget {
   final bool pressEnabled;
   final bool reducedEffects;
   final double radius;
+  final bool tiltEnabled;
 
   @override
   State<InteractiveDepth> createState() => _InteractiveDepthState();
@@ -35,8 +37,8 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
     final effectsEnabled = widget.enabled;
     final matrix = Matrix4.identity()
       ..setEntry(3, 2, .0012)
-      ..rotateX(effectsEnabled ? -_tilt.dy * .012 : 0)
-      ..rotateY(effectsEnabled ? _tilt.dx * .012 : 0)
+      ..rotateX(effectsEnabled && widget.tiltEnabled ? -_tilt.dy * .012 : 0)
+      ..rotateY(effectsEnabled && widget.tiltEnabled ? _tilt.dx * .012 : 0)
       ..scaleByDouble(
         !effectsEnabled
             ? 1
@@ -64,7 +66,7 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
               _tilt = Offset.zero;
             })
           : null,
-      onHover: effectsEnabled
+      onHover: effectsEnabled && widget.tiltEnabled
           ? (event) {
               final box = context.findRenderObject();
               if (box is! RenderBox || !box.hasSize) return;

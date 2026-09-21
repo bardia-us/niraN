@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:niran/core/platform/native_models.dart';
 import 'package:niran/core/widgets/glass_dialog.dart';
 import 'package:niran/core/widgets/country_flag_badge.dart';
+import 'package:niran/core/widgets/glass_surface.dart';
+import 'package:niran/core/widgets/interactive_depth.dart';
 import 'package:niran/features/vpn/app_controller.dart';
 import 'package:niran/main.dart';
 
@@ -377,6 +379,37 @@ void main() {
       expect(handle, findsOneWidget);
       expect(tester.widget(handle), isA<ReorderableDragStartListener>());
     }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('server rows share glass renderer and one-stage hover lift', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(
+            () => _FakeAppController(initialServers: const [_serverA]),
+          ),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.dns_outlined));
+    await tester.pumpAndSettle();
+
+    final depth = tester.widget<InteractiveDepth>(
+      find.byKey(const ValueKey('server-depth-a')),
+    );
+    expect(depth.tiltEnabled, isFalse);
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey('server-row-a')),
+        matching: find.byType(GlassSurface),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 

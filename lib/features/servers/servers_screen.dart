@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,6 +8,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_dialog.dart';
 import '../../core/widgets/country_flag_badge.dart';
 import '../../core/widgets/glass_menu.dart';
+import '../../core/widgets/glass_surface.dart';
 import '../../core/widgets/interactive_depth.dart';
 import '../../core/widgets/operation_error.dart';
 import '../vpn/app_controller.dart';
@@ -81,9 +80,14 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                       padding: const EdgeInsets.only(bottom: 5),
                       child: RepaintBoundary(
                         child: InteractiveDepth(
+                          key: ValueKey('server-depth-${server.id}'),
                           radius: 13,
                           enabled: !_dragging,
                           reducedEffects: view.performanceMode,
+                          // Server rows use one deterministic hover lift. The
+                          // pointer-following tilt made the card visibly move a
+                          // second time after the initial hover transition.
+                          tiltEnabled: false,
                           // Transforming the row while the handle's long-press
                           // recognizer is active makes desktop reorder gestures
                           // unreliable. Keep hover depth, but let the handle own
@@ -98,41 +102,25 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                                   server,
                                   details.globalPosition,
                                 ),
-                            child: AnimatedContainer(
-                              duration: Duration(
-                                milliseconds: view.performanceMode ? 85 : 140,
-                              ),
-                              curve: Curves.easeOutCubic,
-                              decoration: BoxDecoration(
-                                color: server.selected
-                                    ? Theme.of(context)
-                                          .colorScheme
-                                          .primaryContainer
-                                          .withValues(alpha: .26)
-                                    : Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainerLow
-                                          .withValues(alpha: .42),
-                                borderRadius: BorderRadius.circular(13),
-                                border: Border.all(
-                                  color: server.selected
-                                      ? Theme.of(context).colorScheme.primary
-                                            .withValues(alpha: .28)
-                                      : Theme.of(context)
-                                            .colorScheme
-                                            .outlineVariant
-                                            .withValues(alpha: .22),
-                                ),
-                              ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(13),
-                                child: Material(
-                                  type: MaterialType.transparency,
-                                  child: ListTile(
+                            child: GlassSurface(
+                              radius: 13,
+                              blur: 14,
+                              overlayColor: server.selected
+                                  ? Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer
+                                        .withValues(alpha: .16)
+                                  : null,
+                              child: Material(
+                                type: MaterialType.transparency,
+                                child: ListTile(
+                                    key: ValueKey('server-row-${server.id}'),
                                     splashColor: Theme.of(context)
                                         .colorScheme
                                         .primary
                                         .withValues(alpha: .10),
+                                    hoverColor: Colors.transparent,
+                                    focusColor: Colors.transparent,
                                     leading: _SelectionIndicator(
                                       selected: server.selected,
                                       reducedEffects: view.performanceMode,
@@ -189,7 +177,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                                       context,
                                       () => controller.selectServer(server.id),
                                     ),
-                                  ),
                                 ),
                               ),
                             ),
@@ -210,7 +197,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
               serverCount: app.servers.length,
               isPinging: app.isPinging,
               isRefreshing: app.isRefreshing,
-              reducedEffects: view.performanceMode,
               onPing: app.servers.isEmpty
                   ? null
                   : app.isPinging
@@ -402,7 +388,6 @@ class _ServersGlassHeader extends StatelessWidget {
     required this.serverCount,
     required this.isPinging,
     required this.isRefreshing,
-    required this.reducedEffects,
     required this.onPing,
     required this.onRefresh,
   });
@@ -411,30 +396,13 @@ class _ServersGlassHeader extends StatelessWidget {
   final int serverCount;
   final bool isPinging;
   final bool isRefreshing;
-  final bool reducedEffects;
   final VoidCallback? onPing;
   final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final dark = theme.brightness == Brightness.dark;
-    final content = DecoratedBox(
-      decoration: BoxDecoration(
-        color: scheme.surface.withValues(
-          alpha: reducedEffects
-              ? .96
-              : dark
-              ? .70
-              : .88,
-        ),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: dark ? .48 : .62),
-        ),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: SizedBox(
+    final content = SizedBox(
         key: const Key('servers-toolbar'),
         height: height,
         child: Padding(
@@ -528,19 +496,11 @@ class _ServersGlassHeader extends StatelessWidget {
             },
           ),
         ),
-      ),
-    );
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: reducedEffects
-          ? content
-          : BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: dark ? 10 : 6,
-                sigmaY: dark ? 10 : 6,
-              ),
-              child: content,
-            ),
+      );
+    return GlassSurface(
+      radius: 16,
+      blur: 16,
+      child: content,
     );
   }
 }
