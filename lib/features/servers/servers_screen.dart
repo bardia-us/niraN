@@ -23,8 +23,6 @@ class ServersScreen extends ConsumerStatefulWidget {
 }
 
 class _ServersScreenState extends ConsumerState<ServersScreen> {
-  bool _dragging = false;
-
   @override
   Widget build(BuildContext context) {
     final view = ref.watch(
@@ -69,8 +67,6 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                     context,
                     () => controller.reorderServers(oldIndex, newIndex),
                   ),
-                  onReorderStart: (_) => setState(() => _dragging = true),
-                  onReorderEnd: (_) => setState(() => _dragging = false),
                   proxyDecorator: (child, index, animation) => child,
                   itemBuilder: (context, index) {
                     final server = app.servers[index];
@@ -82,7 +78,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                         child: InteractiveDepth(
                           key: ValueKey('server-depth-${server.id}'),
                           radius: 13,
-                          enabled: !_dragging,
+                          enabled: false,
                           reducedEffects: view.performanceMode,
                           // Server rows use one deterministic hover lift. The
                           // pointer-following tilt made the card visibly move a
@@ -104,7 +100,8 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                                 ),
                             child: GlassSurface(
                               radius: 13,
-                              blur: 14,
+                              blur: 3,
+                              style: GlassSurfaceStyle.flat,
                               overlayColor: server.selected
                                   ? Theme.of(context)
                                         .colorScheme
@@ -114,69 +111,65 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                               child: Material(
                                 type: MaterialType.transparency,
                                 child: ListTile(
-                                    key: ValueKey('server-row-${server.id}'),
-                                    splashColor: Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withValues(alpha: .10),
-                                    hoverColor: Colors.transparent,
-                                    focusColor: Colors.transparent,
-                                    leading: _SelectionIndicator(
-                                      selected: server.selected,
-                                      reducedEffects: view.performanceMode,
-                                    ),
-                                    title: _ServerTitle(server: server),
-                                    subtitle: Text(
-                                      '${server.protocol}  ${server.transport}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        _Latency(server: server),
-                                        ReorderableDragStartListener(
-                                          key: ValueKey(
-                                            'server-drag-${server.id}',
-                                          ),
-                                          index: index,
-                                          child: Tooltip(
-                                            message: 'Drag to reorder',
-                                            child: MouseRegion(
-                                              cursor: SystemMouseCursors.grab,
-                                              child: const Padding(
-                                                padding: EdgeInsets.all(8),
-                                                child: Icon(
-                                                  Icons.drag_indicator_rounded,
-                                                  size: 20,
-                                                ),
+                                  key: ValueKey('server-row-${server.id}'),
+                                  splashColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary.withValues(alpha: .10),
+                                  hoverColor: Colors.transparent,
+                                  focusColor: Colors.transparent,
+                                  leading: _SelectionIndicator(
+                                    selected: server.selected,
+                                    reducedEffects: view.performanceMode,
+                                  ),
+                                  title: _ServerTitle(server: server),
+                                  subtitle: Text(
+                                    '${server.protocol}  ${server.transport}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _Latency(server: server),
+                                      ReorderableDragStartListener(
+                                        key: ValueKey(
+                                          'server-drag-${server.id}',
+                                        ),
+                                        index: index,
+                                        child: Tooltip(
+                                          message: 'Drag to reorder',
+                                          child: MouseRegion(
+                                            cursor: SystemMouseCursors.grab,
+                                            child: const Padding(
+                                              padding: EdgeInsets.all(8),
+                                              child: Icon(
+                                                Icons.drag_indicator_rounded,
+                                                size: 20,
                                               ),
                                             ),
                                           ),
                                         ),
-                                        Builder(
-                                          builder: (buttonContext) =>
-                                              IconButton(
-                                                tooltip: context.s(
-                                                  'serverActions',
-                                                ),
-                                                onPressed: () => _serverActions(
-                                                  context,
-                                                  controller,
-                                                  server,
-                                                  _menuPosition(buttonContext),
-                                                ),
-                                                icon: const Icon(
-                                                  Icons.more_vert_rounded,
-                                                ),
-                                              ),
+                                      ),
+                                      Builder(
+                                        builder: (buttonContext) => IconButton(
+                                          tooltip: context.s('serverActions'),
+                                          onPressed: () => _serverActions(
+                                            context,
+                                            controller,
+                                            server,
+                                            _menuPosition(buttonContext),
+                                          ),
+                                          icon: const Icon(
+                                            Icons.more_vert_rounded,
+                                          ),
                                         ),
-                                      ],
-                                    ),
-                                    onTap: () => _perform(
-                                      context,
-                                      () => controller.selectServer(server.id),
-                                    ),
+                                      ),
+                                    ],
+                                  ),
+                                  onTap: () => _perform(
+                                    context,
+                                    () => controller.selectServer(server.id),
+                                  ),
                                 ),
                               ),
                             ),
@@ -195,21 +188,77 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
             child: _ServersGlassHeader(
               height: headerHeight,
               serverCount: app.servers.length,
-              isPinging: app.isPinging,
-              isRefreshing: app.isRefreshing,
-              onPing: app.servers.isEmpty
-                  ? null
-                  : app.isPinging
-                  ? controller.cancelPing
-                  : () => _perform(context, controller.pingAll),
-              onRefresh: app.isRefreshing
-                  ? null
-                  : () => _perform(context, controller.refreshSubscription),
+              onMenu: (position) => _pageActions(
+                context,
+                controller,
+                position,
+                isPinging: app.isPinging,
+                isRefreshing: app.isRefreshing,
+              ),
             ),
           ),
         ),
       ],
     );
+  }
+
+  Future<void> _pageActions(
+    BuildContext context,
+    AppController controller,
+    Offset position, {
+    required bool isPinging,
+    required bool isRefreshing,
+  }) async {
+    final action = await showGlassMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        GlassMenuItem(
+          value: 'restart',
+          icon: Icons.restart_alt_rounded,
+          label: context.s('restartService'),
+        ),
+        GlassMenuItem(
+          value: 'sort',
+          icon: Icons.sort_rounded,
+          label: context.s('sortByTestResults'),
+        ),
+        GlassMenuItem(
+          value: 'tcp',
+          icon: Icons.cable_rounded,
+          label: context.s('testTcpDelays'),
+        ),
+        GlassMenuItem(
+          value: 'real',
+          icon: Icons.network_ping_rounded,
+          label: context.s('testRealDelays'),
+        ),
+        GlassMenuItem(
+          value: 'refresh',
+          icon: Icons.sync_rounded,
+          label: context.s('refresh'),
+        ),
+      ],
+    );
+    if (!context.mounted || action == null) return;
+    switch (action) {
+      case 'restart':
+        await _perform(context, controller.restartService);
+      case 'sort':
+        await _perform(context, controller.sortServersByTestResults);
+      case 'tcp':
+        if (!isPinging) await _perform(context, controller.tcpPingAll);
+      case 'real':
+        if (isPinging) {
+          await _perform(context, controller.cancelPing);
+        } else {
+          await _perform(context, controller.pingAll);
+        }
+      case 'refresh':
+        if (!isRefreshing) {
+          await _perform(context, controller.refreshSubscription);
+        }
+    }
   }
 
   Future<void> _serverActions(
@@ -386,122 +435,58 @@ class _ServersGlassHeader extends StatelessWidget {
   const _ServersGlassHeader({
     required this.height,
     required this.serverCount,
-    required this.isPinging,
-    required this.isRefreshing,
-    required this.onPing,
-    required this.onRefresh,
+    required this.onMenu,
   });
 
   final double height;
   final int serverCount;
-  final bool isPinging;
-  final bool isRefreshing;
-  final VoidCallback? onPing;
-  final VoidCallback? onRefresh;
+  final ValueChanged<Offset> onMenu;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final content = SizedBox(
-        key: const Key('servers-toolbar'),
-        height: height,
-        child: Padding(
-          padding: const EdgeInsetsDirectional.only(start: 14, end: 4),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 520;
-              return Directionality(
-                textDirection: TextDirection.ltr,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${context.s('servers')} ($serverCount)',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+      key: const Key('servers-toolbar'),
+      height: height,
+      child: Padding(
+        padding: const EdgeInsetsDirectional.only(start: 14, end: 4),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Directionality(
+              textDirection: TextDirection.ltr,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${context.s('servers')} ($serverCount)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    Row(
-                      key: const Key('servers-toolbar-actions'),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (compact)
-                          IconButton(
-                            tooltip: isPinging
-                                ? context.s('cancel')
-                                : context.s('testAll'),
-                            onPressed: onPing,
-                            icon: Icon(
-                              isPinging
-                                  ? Icons.close_rounded
-                                  : Icons.network_ping_rounded,
-                            ),
-                          )
-                        else
-                          TextButton.icon(
-                            onPressed: onPing,
-                            style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                              ),
-                            ),
-                            icon: Icon(
-                              isPinging
-                                  ? Icons.close_rounded
-                                  : Icons.network_ping_rounded,
-                              size: 19,
-                            ),
-                            label: Text(
-                              isPinging
-                                  ? context.s('cancel')
-                                  : context.s('testAll'),
-                            ),
-                          ),
-                        const SizedBox(width: 4),
-                        if (compact)
-                          IconButton(
-                            tooltip: context.s('updateSubscription'),
-                            onPressed: onRefresh,
-                            icon: isRefreshing
-                                ? const SizedBox.square(
-                                    dimension: 19,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.sync_rounded),
-                          )
-                        else
-                          TextButton.icon(
-                            onPressed: onRefresh,
-                            icon: isRefreshing
-                                ? const SizedBox.square(
-                                    dimension: 19,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.sync_rounded),
-                            label: Text(context.s('updateSubscription')),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+                  ),
+                  Row(
+                    key: const Key('servers-toolbar-actions'),
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Builder(
+                        builder: (buttonContext) => IconButton(
+                          tooltip: context.s('serverActions'),
+                          onPressed: () => onMenu(_menuPosition(buttonContext)),
+                          icon: const Icon(Icons.more_vert_rounded),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
         ),
-      );
-    return GlassSurface(
-      radius: 16,
-      blur: 16,
-      child: content,
+      ),
     );
+    return GlassSurface(radius: 16, blur: 18, child: content);
   }
 }
 

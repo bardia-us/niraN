@@ -30,7 +30,7 @@ Future<T?> showGlassMenu<T>({
     context: context,
     barrierDismissible: true,
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-    barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .16),
+    barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .035),
     transitionDuration: const Duration(milliseconds: 180),
     pageBuilder: (routeContext, _, _) => Stack(
       children: [
@@ -42,7 +42,7 @@ Future<T?> showGlassMenu<T>({
             color: Colors.transparent,
             child: GlassSurface(
               radius: 18,
-              blur: 22,
+              blur: 18,
               padding: const EdgeInsets.symmetric(vertical: 7),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

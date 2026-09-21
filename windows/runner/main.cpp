@@ -120,8 +120,8 @@ void ApplySavedWindowBounds(HWND window) {
   if (!GetMonitorInfoW(monitor, &info)) return;
   const int work_width = info.rcWork.right - info.rcWork.left;
   const int work_height = info.rcWork.bottom - info.rcWork.top;
-  const int width = std::clamp(static_cast<int>(raw_width), 760, work_width);
-  const int height = std::clamp(static_cast<int>(raw_height), 560, work_height);
+  const int width = std::clamp(static_cast<int>(raw_width), 800, work_width);
+  const int height = std::clamp(static_cast<int>(raw_height), 600, work_height);
   const int work_left = static_cast<int>(info.rcWork.left);
   const int work_top = static_cast<int>(info.rcWork.top);
   const int work_right = static_cast<int>(info.rcWork.right);

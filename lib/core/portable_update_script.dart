@@ -124,7 +124,7 @@ try {
 
   Write-State 'renamingFolder'
   $CurrentFolder = Get-Item -LiteralPath $InstallDirectory
-  if ($CurrentFolder.Name -match '^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64$' -and
+  if ($CurrentFolder.Name -match '^niraN-(?:v)?\d+\.\d+\.\d+(?:-QA)?-windows-x64$' -and
       $CurrentFolder.Name -ne $TargetFolderName) {
     $TargetFolder = Join-Path $CurrentFolder.Parent.FullName $TargetFolderName
     if (-not (Test-Path -LiteralPath $TargetFolder)) {

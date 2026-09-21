@@ -128,6 +128,7 @@ abstract final class AppTheme {
       ),
       dialogTheme: DialogThemeData(
         elevation: 2,
+        barrierColor: scheme.scrim.withValues(alpha: .035),
         backgroundColor: scheme.surfaceContainerHigh.withValues(
           alpha: isDark ? .91 : .93,
         ),
@@ -138,7 +139,7 @@ abstract final class AppTheme {
         modalBackgroundColor: scheme.surfaceContainer.withValues(
           alpha: isDark ? .94 : .96,
         ),
-        modalBarrierColor: scheme.scrim.withValues(alpha: .28),
+        modalBarrierColor: scheme.scrim.withValues(alpha: .045),
         showDragHandle: true,
         clipBehavior: Clip.antiAlias,
         shape: const RoundedRectangleBorder(

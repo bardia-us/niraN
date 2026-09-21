@@ -416,6 +416,14 @@ class _AppShellState extends ConsumerState<AppShell> {
   ) async {
     if (!mounted || currentVersion.isEmpty) return;
     await WindowsUpdateManager.instance.initialize(currentVersion);
+    // Release notes are an installed-version lifecycle concern, not a GitHub
+    // update-check side effect. Resolve them first so an optional update
+    // prompt, a slow network request, or a missing latest release can never
+    // suppress What's New after a real upgrade.
+    if (!_whatsNewQueued) {
+      _whatsNewQueued = true;
+      await _showWhatsNewIfNeeded(currentVersion, language);
+    }
     try {
       final release = await (_startupUpdateOperation ??=
           const GitHubUpdateChecker()
@@ -484,11 +492,6 @@ class _AppShellState extends ConsumerState<AppShell> {
       }
     } on Object {
       // Startup must remain usable when GitHub is unavailable.
-    } finally {
-      if (!_whatsNewQueued) {
-        _whatsNewQueued = true;
-        await _showWhatsNewIfNeeded(currentVersion, language);
-      }
     }
   }
 

@@ -212,6 +212,60 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     }
   }
 
+  Future<void> tcpPingAll() => _runExclusiveAction('ping', _tcpPingAllOnce);
+
+  Future<void> _tcpPingAllOnce() async {
+    final servers = _current?.servers ?? const <ServerInfo>[];
+    if (servers.isEmpty) return;
+    _set((value) => value.copyWith(isPinging: true));
+    try {
+      final results = <String, int>{};
+      const batchSize = 8;
+      for (var start = 0; start < servers.length; start += batchSize) {
+        final end = (start + batchSize).clamp(0, servers.length);
+        final batch = servers.sublist(start, end);
+        await Future.wait([
+          for (final server in batch)
+            NirangNative.tcpPingServer(
+              server.id,
+            ).then((value) => results[server.id] = value),
+        ]);
+      }
+      _set(
+        (value) => value.copyWith(
+          servers: [
+            for (final server in value.servers)
+              server.copyWith(
+                ping: results[server.id],
+                clearPing: (results[server.id] ?? -1) <= 0,
+                status: (results[server.id] ?? -1) > 0 ? 'success' : 'timeout',
+              ),
+          ],
+        ),
+      );
+    } finally {
+      _set((value) => value.copyWith(isPinging: false));
+    }
+  }
+
+  Future<void> sortServersByTestResults() async {
+    final current = _current?.servers ?? const <ServerInfo>[];
+    final indexed = current.indexed.toList(growable: false);
+    final sorted = [...indexed]
+      ..sort((a, b) {
+        final aPing = a.$2.ping;
+        final bPing = b.$2.ping;
+        if (aPing == null && bPing == null) return a.$1.compareTo(b.$1);
+        if (aPing == null) return 1;
+        if (bPing == null) return -1;
+        final compared = aPing.compareTo(bPing);
+        return compared != 0 ? compared : a.$1.compareTo(b.$1);
+      });
+    final ids = sorted.map((entry) => entry.$2.id).toList(growable: false);
+    final servers = await NirangNative.reorderServers(ids);
+    _set((value) => value.copyWith(servers: _servers(servers)));
+  }
+
   Future<void> cancelPing() =>
       _runExclusiveAction('pingCancel', _cancelPingOnce);
 

@@ -410,6 +410,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    final rowGlass = tester.widget<GlassSurface>(
+      find.ancestor(
+        of: find.byKey(const ValueKey('server-row-a')),
+        matching: find.byType(GlassSurface),
+      ),
+    );
+    expect(rowGlass.style, GlassSurfaceStyle.flat);
     expect(tester.takeException(), isNull);
   });
 

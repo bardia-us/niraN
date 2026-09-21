@@ -163,14 +163,12 @@ final class WindowsUpdateManager extends ChangeNotifier {
           ).compareTo(SemanticVersion.parse(currentVersion)) <=
           0) {
         if (helperResult?.state == 'completed') {
-          snapshot = UpdateDownloadSnapshot(
-            status: UpdateDownloadStatus.updateCompleted,
-            version: version,
-            fileName: '${data['fileName'] ?? ''}',
-            received: (data['total'] as num?)?.toInt() ?? 0,
-            total: (data['total'] as num?)?.toInt() ?? 0,
-          );
           await _cleanupCompletedArtifacts(directory);
+          _asset = null;
+          // The helper has already consumed and removed the package. Never
+          // expose a stale Download/Delete row for a file that no longer
+          // exists. Upgrade confirmation is owned by WindowsReleaseState.
+          snapshot = const UpdateDownloadSnapshot();
           notifyListeners();
           return;
         }
@@ -925,6 +923,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
         // A short-lived helper lock is harmless and retried on next startup.
       }
     }
+    await _cleanupUnknown(directory);
   }
 
   bool _isUpdaterOwned(String path) {

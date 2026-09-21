@@ -98,6 +98,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_GETMINMAXINFO) {
+    auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+    const UINT dpi = GetDpiForWindow(hwnd);
+    limits->ptMinTrackSize.x = MulDiv(800, dpi == 0 ? 96 : dpi, 96);
+    limits->ptMinTrackSize.y = MulDiv(600, dpi == 0 ? 96 : dpi, 96);
+    return 0;
+  }
   if (message == niran::WindowsBackendBridge::kAsyncCompletionMessage &&
       windows_backend_) {
     return windows_backend_->HandleAsyncCompletion(lparam) ? 0 : 1;

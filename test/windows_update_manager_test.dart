@@ -245,7 +245,8 @@ void main() {
 
       await updater.initialize('0.3.3');
 
-      expect(updater.snapshot.status, UpdateDownloadStatus.updateCompleted);
+      expect(updater.snapshot.status, UpdateDownloadStatus.idle);
+      expect(updater.snapshot.fileName, isEmpty);
       expect(await state.exists(), isFalse);
       expect(await result.exists(), isFalse);
       expect(await log.exists(), isFalse);

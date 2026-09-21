@@ -56,6 +56,9 @@ class AppStrings {
       'configureHint':
           'Set NIRANG_SUBSCRIPTION_URL in android/gradle.properties or the build environment.',
       'testAll': 'Test all',
+      'sortByTestResults': 'Sort by test results',
+      'testRealDelays': 'Test real delays',
+      'testTcpDelays': 'Test TCP delays (TCPing)',
       'cancel': 'Cancel',
       'testLatency': 'Test latency',
       'tcpPing': 'TCP Ping',
@@ -357,6 +360,9 @@ class AppStrings {
       'configureHint':
           'NIRANG_SUBSCRIPTION_URL را در android/gradle.properties یا محیط Build تنظیم کنید.',
       'testAll': 'تست همه',
+      'sortByTestResults': 'چینش بر اساس نتیجه تست',
+      'testRealDelays': 'تست تأخیر واقعی',
+      'testTcpDelays': 'تست تأخیر TCP (TCPing)',
       'cancel': 'لغو',
       'testLatency': 'تست تأخیر',
       'tcpPing': 'پینگ TCP',

@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/vpn/app_controller.dart';
 
+enum GlassSurfaceStyle { liquid, flat }
+
 /// Windows-compatible counterpart of niraNG's Liquid Glass surface.
 ///
 /// The fragment shader used on Android/Impeller is not supported by Flutter's
@@ -18,8 +20,9 @@ class GlassSurface extends ConsumerWidget {
     super.key,
     this.padding,
     this.radius = 16,
-    this.blur = 9,
+    this.blur = 18,
     this.overlayColor,
+    this.style = GlassSurfaceStyle.liquid,
   });
 
   final Widget child;
@@ -27,6 +30,7 @@ class GlassSurface extends ConsumerWidget {
   final double radius;
   final double blur;
   final Color? overlayColor;
+  final GlassSurfaceStyle style;
 
   static List<double> _saturationMatrix(double saturation) {
     const lumR = .299;
@@ -79,7 +83,22 @@ class GlassSurface extends ConsumerWidget {
       );
     }
 
-    final saturation = dark ? 1.48 : 1.38;
+    if (style == GlassSurfaceStyle.flat) {
+      return _FlatGlassSurface(
+        borderRadius: borderRadius,
+        blur: blur,
+        dark: dark,
+        scheme: scheme,
+        overlayColor: overlayColor,
+        child: content,
+      );
+    }
+
+    // This is the Windows/Skia equivalent used by the approved Glass Test
+    // Lab. Keep detail destruction and colour transmission independent: blur
+    // removes glyph detail while the luminance-preserving saturation keeps
+    // flags, latency colours and accents present inside the glass.
+    const saturation = 1.25;
     final filter = ImageFilter.compose(
       inner: ColorFilter.matrix(_saturationMatrix(saturation)),
       outer: ImageFilter.blur(
@@ -94,16 +113,16 @@ class GlassSurface extends ConsumerWidget {
         borderRadius: borderRadius,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? .32 : .10),
-            blurRadius: 22,
-            spreadRadius: -5,
-            offset: const Offset(0, 9),
+            color: Colors.black.withValues(alpha: dark ? .26 : .08),
+            blurRadius: 20,
+            spreadRadius: -6,
+            offset: const Offset(0, 8),
           ),
           BoxShadow(
-            color: Colors.white.withValues(alpha: dark ? .025 : .24),
-            blurRadius: 7,
+            color: Colors.white.withValues(alpha: dark ? .02 : .16),
+            blurRadius: 6,
             spreadRadius: -4,
-            offset: const Offset(-2, -2),
+            offset: const Offset(-1, -1),
           ),
         ],
       ),
@@ -115,12 +134,8 @@ class GlassSurface extends ConsumerWidget {
             Positioned.fill(
               child: BackdropFilter(
                 filter: filter,
-                blendMode: BlendMode.srcOver,
-                child: ColoredBox(
-                  color: dark
-                      ? Colors.white.withValues(alpha: .018)
-                      : Colors.black.withValues(alpha: .012),
-                ),
+                blendMode: BlendMode.srcATop,
+                child: const SizedBox.expand(),
               ),
             ),
             if (overlayColor case final color?)
@@ -138,6 +153,50 @@ class GlassSurface extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _FlatGlassSurface extends StatelessWidget {
+  const _FlatGlassSurface({
+    required this.borderRadius,
+    required this.blur,
+    required this.dark,
+    required this.scheme,
+    required this.overlayColor,
+    required this.child,
+  });
+
+  final BorderRadius borderRadius;
+  final double blur;
+  final bool dark;
+  final ColorScheme scheme;
+  final Color? overlayColor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: borderRadius,
+    child: BackdropFilter(
+      filter: ImageFilter.blur(
+        sigmaX: blur.clamp(0, 4),
+        sigmaY: blur.clamp(0, 4),
+        tileMode: TileMode.mirror,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Color.alphaBlend(
+            overlayColor ?? Colors.transparent,
+            scheme.surface.withValues(alpha: dark ? .54 : .66),
+          ),
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: dark ? .34 : .48),
+            width: .8,
+          ),
+          borderRadius: borderRadius,
+        ),
+        child: child,
+      ),
+    ),
+  );
 }
 
 class _LiquidGlassFramePainter extends CustomPainter {
@@ -161,23 +220,47 @@ class _LiquidGlassFramePainter extends CustomPainter {
       center: rect.center,
       radius: size.longestSide / 2,
     );
+    final glassColor = dark
+        ? Colors.white.withValues(alpha: .025)
+        : Colors.black.withValues(alpha: .015);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = glassColor
+        ..blendMode = dark ? BlendMode.screen : BlendMode.multiply
+        ..style = PaintingStyle.fill,
+    );
+    final lightIntensity = dark ? .72 : .95;
+    final ambientStrength = dark ? .20 : .34;
+    final alpha = Curves.easeOut.transform(lightIntensity);
+    final color = Colors.white.withValues(alpha: alpha);
+    const lightAngle = 1.8;
+    final x = math.cos(lightAngle);
+    final y = math.sin(lightAngle);
+    final lightCoverage = .3 + (.5 - .3) * lightIntensity;
+    final alignmentWithShortestSide = (size.aspectRatio < 1 ? y : x).abs();
+    final aspectAdjustment = 1 - 1 / size.aspectRatio;
+    final gradientScale = aspectAdjustment * (1 - alignmentWithShortestSide);
+    final inset = .5 * gradientScale.clamp(0, 1);
+    final secondInset =
+        lightCoverage + (.5 - lightCoverage) * gradientScale.clamp(0, 1);
     final edge = LinearGradient(
-      begin: const Alignment(-.75, -.75),
-      end: const Alignment(.75, .75),
+      begin: Alignment(x, y),
+      end: Alignment(-x, -y),
       colors: [
-        Colors.white.withValues(alpha: dark ? .72 : .92),
-        Colors.white.withValues(alpha: dark ? .22 : .48),
-        Colors.white.withValues(alpha: dark ? .08 : .20),
-        Colors.black.withValues(alpha: dark ? .42 : .13),
+        color,
+        color.withValues(alpha: ambientStrength),
+        color.withValues(alpha: ambientStrength),
+        color,
       ],
-      stops: const [0, .34, .67, 1],
+      stops: [inset, secondInset, 1 - secondInset, 1 - inset],
     ).createShader(square);
 
     canvas.drawPath(
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.15
+        ..strokeWidth = 1 + lightIntensity
         ..shader = edge
         ..blendMode = BlendMode.hardLight,
     );
@@ -185,9 +268,9 @@ class _LiquidGlassFramePainter extends CustomPainter {
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.2
+        ..strokeWidth = 2
         ..shader = edge
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.7)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, .5)
         ..blendMode = BlendMode.overlay,
     );
   }
