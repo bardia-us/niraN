@@ -13,15 +13,15 @@ Future<T?> showNirangDialog<T>({
   barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .035),
   transitionDuration: const Duration(milliseconds: 140),
   pageBuilder: (routeContext, _, _) => builder(routeContext),
-  transitionBuilder: (_, animation, _, child) => FadeTransition(
-    opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-    child: ScaleTransition(
-      scale: Tween<double>(
-        begin: .96,
-        end: 1,
-      ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
-      child: child,
-    ),
+  // A BackdropFilter inside FadeTransition is rendered through an opacity
+  // save-layer, which can expose the unfiltered backdrop on Windows. Keep the
+  // glass fully painted from frame one and animate geometry only.
+  transitionBuilder: (_, animation, _, child) => ScaleTransition(
+    scale: Tween<double>(
+      begin: .96,
+      end: 1,
+    ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+    child: child,
   ),
 );
 

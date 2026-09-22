@@ -76,15 +76,15 @@ Future<T?> showGlassMenu<T>({
         ),
       ],
     ),
-    transitionBuilder: (_, animation, _, child) => FadeTransition(
-      opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-      child: ScaleTransition(
-        scale: Tween(begin: .96, end: 1.0).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-        ),
-        alignment: Alignment.topLeft,
-        child: child,
-      ),
+    // Keep BackdropFilter outside an opacity save-layer so the final blur is
+    // present on the first visible Windows frame.
+    transitionBuilder: (_, animation, _, child) => ScaleTransition(
+      scale: Tween(
+        begin: .96,
+        end: 1.0,
+      ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+      alignment: Alignment.topLeft,
+      child: child,
     ),
   );
 }

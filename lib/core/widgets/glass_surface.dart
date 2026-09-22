@@ -134,7 +134,11 @@ class GlassSurface extends ConsumerWidget {
             Positioned.fill(
               child: BackdropFilter(
                 filter: filter,
-                blendMode: BlendMode.srcATop,
+                // srcOver is the only BackdropFilter blend mode guaranteed
+                // across Flutter renderers. srcATop preserves the destination
+                // alpha and allowed the sharp backdrop to dominate on Windows,
+                // making higher sigma values appear to do nothing.
+                blendMode: BlendMode.srcOver,
                 child: const SizedBox.expand(),
               ),
             ),
