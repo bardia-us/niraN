@@ -6,16 +6,35 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
-final deviceAccessBlock = ValueNotifier<String?>(null);
+enum DeviceAccessGateKind { blocked, updateRequired }
+
+final class DeviceAccessGate {
+  const DeviceAccessGate(this.kind, this.message);
+
+  final DeviceAccessGateKind kind;
+  final String message;
+}
+
+final deviceAccessGate = ValueNotifier<DeviceAccessGate?>(null);
 
 void markDeviceAccessBlocked([String? message]) {
-  deviceAccessBlock.value = message?.trim().isNotEmpty == true
-      ? message!.trim()
-      : 'blocked_by_administrator';
+  deviceAccessGate.value = DeviceAccessGate(
+    DeviceAccessGateKind.blocked,
+    message?.trim().isNotEmpty == true
+        ? message!.trim()
+        : 'blocked_by_administrator',
+  );
+}
+
+void markDeviceUpdateRequired([String? message]) {
+  deviceAccessGate.value = DeviceAccessGate(
+    DeviceAccessGateKind.updateRequired,
+    message?.trim().isNotEmpty == true ? message!.trim() : '0.3.7',
+  );
 }
 
 void clearDeviceAccessBlocked() {
-  deviceAccessBlock.value = null;
+  deviceAccessGate.value = null;
 }
 
 const deviceRegistrationEndpoint = 'https://neovip.ir/apiniraN/api.php';

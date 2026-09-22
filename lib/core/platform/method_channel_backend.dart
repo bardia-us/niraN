@@ -25,6 +25,9 @@ final class MethodChannelPlatformBackend implements NiranPlatformBackend {
       {};
 
   @override
+  Future<void> checkAccessPolicy() async {}
+
+  @override
   Future<List<dynamic>> selectServer(String id) async =>
       (await _methods.invokeMethod<List<dynamic>>('selectServer', {
         'id': id,

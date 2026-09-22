@@ -20,6 +20,7 @@ class GlassSurface extends ConsumerWidget {
     this.padding,
     this.radius = 16,
     this.blur = 18,
+    this.saturation = 1.25,
     this.overlayColor,
     this.style = GlassSurfaceStyle.liquid,
   });
@@ -28,6 +29,7 @@ class GlassSurface extends ConsumerWidget {
   final EdgeInsetsGeometry? padding;
   final double radius;
   final double blur;
+  final double saturation;
   final Color? overlayColor;
   final GlassSurfaceStyle style;
 
@@ -97,7 +99,6 @@ class GlassSurface extends ConsumerWidget {
     // Lab. Keep detail destruction and colour transmission independent: blur
     // removes glyph detail while the luminance-preserving saturation keeps
     // flags, latency colours and accents present inside the glass.
-    const saturation = 1.25;
     final filter = ImageFilter.compose(
       inner: ColorFilter.matrix(_saturationMatrix(saturation)),
       outer: ImageFilter.blur(

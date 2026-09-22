@@ -20,6 +20,7 @@ class NirangNative {
   static Future<Map<dynamic, dynamic>> initialize() => _backend.initialize();
   static Future<Map<dynamic, dynamic>> refreshSubscription() =>
       _backend.refreshSubscription();
+  static Future<void> checkAccessPolicy() => _backend.checkAccessPolicy();
   static Future<List<dynamic>> selectServer(String id) =>
       _backend.selectServer(id);
   static Future<List<dynamic>> reorderServers(List<String> ids) =>

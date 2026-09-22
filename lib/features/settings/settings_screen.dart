@@ -100,7 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           isRefreshing: app?.isRefreshing ?? false,
           deletedCount: app?.deletedServerCount ?? 0,
           coreVersion: app?.coreVersion ?? 'Bundled',
-          appVersion: app?.appVersion ?? '0.3.6',
+          appVersion: app?.appVersion ?? '0.3.7',
         );
       }),
     );
@@ -1001,6 +1001,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   ) async {
     setState(() => _checkingUpdates = true);
     try {
+      await controller.checkAccessPolicy();
+      if (!context.mounted) return;
       final release = await const GitHubUpdateChecker().check(currentVersion);
       if (!context.mounted) return;
       if (!release.updateAvailable) {

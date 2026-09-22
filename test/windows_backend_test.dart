@@ -1095,6 +1095,56 @@ void main() {
     },
   );
 
+  test(
+    'mandatory update discovered during refresh stops Core and emits update gate',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-update-refresh-test-',
+      );
+      final host = _FakeWindowsHost();
+      final access = _AllowedRemoteAccess();
+      final events = <Map<dynamic, dynamic>>[];
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: access,
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+          proxyReadinessProbe: (_) async {},
+        );
+        await backend.initialize();
+        final subscription = backend.events.listen(events.add);
+        addTearDown(subscription.cancel);
+        await backend.connect('server');
+        host.calls.clear();
+        access.failure = const DeviceAccessException(
+          'update_required',
+          'niraN must be updated to 0.3.7 or newer',
+        );
+
+        await expectLater(
+          backend.refreshSubscription(),
+          throwsA(
+            isA<DeviceAccessException>().having(
+              (error) => error.reason,
+              'reason',
+              'update_required',
+            ),
+          ),
+        );
+        expect(host.calls, containsAllInOrder(['disable', 'stop']));
+        expect(
+          events.any((event) => event['type'] == 'updateRequired'),
+          isTrue,
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
   test('Windows TUN lifecycle never changes System Proxy', () async {
     final directory = await Directory.systemTemp.createTemp(
       'niraN-tun-lifecycle-test-',

@@ -10,6 +10,12 @@ import 'package:niran/features/registration/registration_bootstrap.dart';
 void main() {
   tearDown(clearDeviceAccessBlocked);
 
+  test('mandatory update uses the global access gate', () {
+    markDeviceUpdateRequired('niraN must be updated to 0.3.7 or newer');
+    expect(deviceAccessGate.value?.kind, DeviceAccessGateKind.updateRequired);
+    expect(deviceAccessGate.value?.message, contains('0.3.7'));
+  });
+
   test(
     'registration is consent-gated and persists a random installation id',
     () async {

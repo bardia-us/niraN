@@ -48,14 +48,24 @@ class _NiranRegistrationBootstrapState
       final error = snapshot.error;
       if (_isBlocked(error)) markDeviceAccessBlocked(_errorMessage(error));
       if (snapshot.data == true) {
-        return ValueListenableBuilder<String?>(
-          valueListenable: deviceAccessBlock,
+        return ValueListenableBuilder<DeviceAccessGate?>(
+          valueListenable: deviceAccessGate,
           child: widget.child,
-          builder: (context, blocked, child) => blocked == null
-              ? child!
-              : _consentApp(
-                  BlockedAccessScreen(onRetry: _retry, onExit: _exit),
+          builder: (context, gate, child) {
+            if (gate == null) return child!;
+            return _consentApp(switch (gate.kind) {
+              DeviceAccessGateKind.blocked => BlockedAccessScreen(
+                onRetry: _retry,
+                onExit: _exit,
+              ),
+              DeviceAccessGateKind.updateRequired =>
+                MandatoryWindowsUpdateScreen(
+                  minimumVersion: _minimumVersionFromText(gate.message),
+                  onRetry: _retry,
+                  onExit: _exit,
                 ),
+            });
+          },
         );
       }
       if (error != null) {
@@ -101,6 +111,7 @@ class _NiranRegistrationBootstrapState
           // mandatory-update lock. Cached allowed access remains usable.
         }
       }
+      clearDeviceAccessBlocked();
     }
     return accepted;
   }
@@ -141,8 +152,10 @@ class _NiranRegistrationBootstrapState
       setState(() => _initialization = _verifyAccess());
     } on Object catch (error) {
       if (mounted) {
-        if (_isBlocked(error)) {
-          markDeviceAccessBlocked(_errorMessage(error));
+        if (_isBlocked(error) || _isUpdateRequired(error)) {
+          if (_isBlocked(error)) {
+            markDeviceAccessBlocked(_errorMessage(error));
+          }
           setState(() => _initialization = Future<bool>.error(error));
           return;
         }
@@ -168,8 +181,11 @@ class _NiranRegistrationBootstrapState
 
   static String _minimumVersion(Object? error) {
     final message = error is DeviceAccessException ? error.message : '';
-    return RegExp(r'\d+\.\d+\.\d+').firstMatch(message)?.group(0) ?? '0.3.6';
+    return _minimumVersionFromText(message);
   }
+
+  static String _minimumVersionFromText(String message) =>
+      RegExp(r'\d+\.\d+\.\d+').firstMatch(message)?.group(0) ?? '0.3.7';
 
   static String _errorMessage(Object? error) => error is DeviceAccessException
       ? error.message

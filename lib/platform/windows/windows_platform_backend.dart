@@ -49,7 +49,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  static const _appVersionFallback = '0.3.6';
+  static const _appVersionFallback = '0.3.7';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -183,7 +183,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     try {
       await _remoteAccess.requireAllowed();
     } on Object catch (error) {
-      if (await _enforceBlockedAccess(error)) return;
+      if (await _enforceAccessGate(error)) return;
       _log(
         'warning',
         'Startup access check unavailable; cached access retained',
@@ -218,6 +218,17 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     });
     _subscriptionRefresh = request;
     return request;
+  }
+
+  @override
+  Future<void> checkAccessPolicy() async {
+    try {
+      await _remoteAccess.requireAllowed();
+      clearDeviceAccessBlocked();
+    } on Object catch (error) {
+      await _enforceAccessGate(error);
+      rethrow;
+    }
   }
 
   Future<Map<dynamic, dynamic>> _refreshSubscription({
@@ -281,7 +292,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       if (emit) _emit('subscription', data);
       return data;
     } on Object catch (error) {
-      await _enforceBlockedAccess(error);
+      await _enforceAccessGate(error);
       _subscriptionError = _subscriptionUserError(error);
       _log('warning', 'Subscription update failed');
       if (emit) _emit('subscriptionError', _subscriptionError);
@@ -460,7 +471,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
-      if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
+      if (await _enforceAccessGate(error, cleanup: false)) rethrow;
       _setConnection('error', server, error: _connectionUserError(error));
       _log('error', 'Connection failed: ${_safeError(error)}');
       rethrow;
@@ -716,7 +727,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     } on Object catch (error) {
       _expectXray = false;
       await _bestEffortCleanup();
-      if (await _enforceBlockedAccess(error, cleanup: false)) rethrow;
+      if (await _enforceAccessGate(error, cleanup: false)) rethrow;
       _setConnection('error', server, error: _connectionUserError(error));
       rethrow;
     } finally {
@@ -1690,12 +1701,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  Future<bool> _enforceBlockedAccess(
-    Object error, {
-    bool cleanup = true,
-  }) async {
+  Future<bool> _enforceAccessGate(Object error, {bool cleanup = true}) async {
     if (error is! DeviceAccessException ||
-        error.reason != 'blocked_by_administrator') {
+        !const {
+          'blocked_by_administrator',
+          'update_required',
+        }.contains(error.reason)) {
       return false;
     }
     _expectXray = false;
@@ -1704,8 +1715,17 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     if (cleanup) await _bestEffortCleanup();
     _connection = _disconnectedConnection();
     _emit('connectionState', _connection);
-    _emit('accessBlocked', {'reason': error.reason, 'message': error.message});
-    _log('warning', 'Remote access was blocked; Core and proxies stopped');
+    final updateRequired = error.reason == 'update_required';
+    _emit(updateRequired ? 'updateRequired' : 'accessBlocked', {
+      'reason': error.reason,
+      'message': error.message,
+    });
+    _log(
+      'warning',
+      updateRequired
+          ? 'A mandatory update was discovered; Core and proxies stopped'
+          : 'Remote access was blocked; Core and proxies stopped',
+    );
     return true;
   }
 

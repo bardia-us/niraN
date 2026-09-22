@@ -30,4 +30,14 @@ void main() {
     await state.markSeen('0.3.6+10');
     expect(await state.shouldShowWhatsNew('0.3.6+10'), isFalse);
   });
+
+  test('0.3.6 QA upgrade to 0.3.7 shows once', () async {
+    final directory = await Directory.systemTemp.createTemp('niran-release-');
+    addTearDown(() => directory.delete(recursive: true));
+    final state = WindowsReleaseState(directory: directory);
+    await state.shouldShowWhatsNew('0.3.6+10');
+    expect(await state.shouldShowWhatsNew('0.3.7+11'), isTrue);
+    await state.markSeen('0.3.7+11');
+    expect(await state.shouldShowWhatsNew('0.3.7+11'), isFalse);
+  });
 }

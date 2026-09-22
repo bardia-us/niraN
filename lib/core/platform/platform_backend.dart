@@ -9,6 +9,7 @@ abstract interface class NiranPlatformBackend {
 
   Future<Map<dynamic, dynamic>> initialize();
   Future<Map<dynamic, dynamic>> refreshSubscription();
+  Future<void> checkAccessPolicy();
   Future<List<dynamic>> selectServer(String id);
   Future<List<dynamic>> reorderServers(List<String> ids);
   Future<List<dynamic>> updateServerProfile(

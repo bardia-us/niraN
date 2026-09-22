@@ -58,6 +58,8 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     return request;
   }
 
+  Future<void> checkAccessPolicy() => NirangNative.checkAccessPolicy();
+
   Future<void> _refreshSubscriptionOnce() async {
     _set(
       (value) =>
@@ -484,6 +486,9 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       case 'accessBlocked':
         final details = _map(data);
         markDeviceAccessBlocked('${details['message'] ?? ''}');
+      case 'updateRequired':
+        final details = _map(data);
+        markDeviceUpdateRequired('${details['message'] ?? ''}');
       case 'pingCompleted':
       case 'pingCancelled':
         _set((value) => value.copyWith(isPinging: false));
@@ -498,7 +503,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     logs: _logs(map['logs'] as List<dynamic>? ?? const []),
     lastUpdated: _number(map['lastUpdated']),
     coreVersion: '${map['coreVersion'] ?? 'Unavailable'}',
-    appVersion: '${map['appVersion'] ?? '0.3.6'}',
+    appVersion: '${map['appVersion'] ?? '0.3.7'}',
     subscriptionConfigured: map['subscriptionConfigured'] == true,
     telegramEligible: map['telegramEligible'] == true,
     subscriptionError: map['subscriptionError']?.toString(),

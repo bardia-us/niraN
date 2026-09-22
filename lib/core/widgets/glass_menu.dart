@@ -42,7 +42,8 @@ Future<T?> showGlassMenu<T>({
             color: Colors.transparent,
             child: GlassSurface(
               radius: 18,
-              blur: 18,
+              blur: 22,
+              saturation: 1.32,
               padding: const EdgeInsets.symmetric(vertical: 7),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
