@@ -150,7 +150,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   }
 
   Future<void> _confirmClear(BuildContext context, WidgetRef ref) async {
-    final clear = await showDialog<bool>(
+    final clear = await showNirangDialog<bool>(
       context: context,
       builder: (context) => NirangAlertDialog(
         title: Text(context.s('clearLogs')),

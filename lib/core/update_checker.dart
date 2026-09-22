@@ -8,11 +8,11 @@ const nirangReleaseByTagApi =
     'https://api.github.com/repos/bardia-us/niraN/releases/tags/';
 
 class SemanticVersion implements Comparable<SemanticVersion> {
-  const SemanticVersion(this.major, this.minor, this.patch);
+  const SemanticVersion(this.major, this.minor, this.patch, [this.build = 0]);
 
   factory SemanticVersion.parse(String value) {
     final match = RegExp(
-      r'^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$',
+      r'^v?(\d+)\.(\d+)\.(\d+)(?:-[^+]*)?(?:\+(\d+))?$',
       caseSensitive: false,
     ).firstMatch(value.trim());
     if (match == null) throw const FormatException('Invalid release version');
@@ -20,6 +20,7 @@ class SemanticVersion implements Comparable<SemanticVersion> {
       int.parse(match.group(1)!),
       int.parse(match.group(2)!),
       int.parse(match.group(3)!),
+      int.tryParse(match.group(4) ?? '') ?? 0,
     );
   }
 
@@ -29,15 +30,20 @@ class SemanticVersion implements Comparable<SemanticVersion> {
     if (majorResult != 0) return majorResult;
     final minorResult = minor.compareTo(other.minor);
     if (minorResult != 0) return minorResult;
-    return patch.compareTo(other.patch);
+    final patchResult = patch.compareTo(other.patch);
+    if (patchResult != 0) return patchResult;
+    return build.compareTo(other.build);
   }
 
   final int major;
   final int minor;
   final int patch;
+  final int build;
+
+  String get releaseVersion => '$major.$minor.$patch';
 
   @override
-  String toString() => '$major.$minor.$patch';
+  String toString() => build == 0 ? releaseVersion : '$releaseVersion+$build';
 }
 
 class ReleaseCheckResult {
@@ -115,7 +121,8 @@ class GitHubUpdateChecker {
   }
 
   Future<BilingualReleaseNotes> releaseNotes(String version) async {
-    final tag = version.startsWith('v') ? version : 'v$version';
+    final releaseVersion = SemanticVersion.parse(version).releaseVersion;
+    final tag = 'v$releaseVersion';
     final payload = await _fetch(
       Uri.parse('$nirangReleaseByTagApi${Uri.encodeComponent(tag)}'),
       version,

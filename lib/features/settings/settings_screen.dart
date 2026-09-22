@@ -937,7 +937,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     BuildContext context,
     AppController controller,
   ) async {
-    final accepted = await showDialog<bool>(
+    final accepted = await showNirangDialog<bool>(
       context: context,
       builder: (dialogContext) => NirangAlertDialog(
         icon: Icon(
@@ -1012,7 +1012,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final updateManager = WindowsUpdateManager.instance;
       final updateAsset = await updateManager.assetFor(release);
       if (!context.mounted) return;
-      final action = await showDialog<String>(
+      final action = await showNirangDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           icon: const Icon(Icons.new_releases_outlined),
@@ -1059,7 +1059,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     AppController controller,
     NativeSettings settings,
   ) async {
-    final result = await showDialog<({String domains, String ips})>(
+    final result = await showNirangDialog<({String domains, String ips})>(
       context: context,
       builder: (_) => _CustomRulesDialog(
         domains: settings.customDomains,
@@ -1102,7 +1102,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     TextInputType keyboardType = TextInputType.url,
     String? Function(String value)? validator,
   }) async {
-    return showDialog<String>(
+    return showNirangDialog<String>(
       context: context,
       builder: (_) => _TextValueDialog(
         title: title,
@@ -1145,7 +1145,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final interval = TextEditingController(text: settings.fragmentInterval);
     final maxSplit = TextEditingController(text: settings.fragmentMaxSplit);
     final formKey = GlobalKey<FormState>();
-    final accepted = await showDialog<bool>(
+    final accepted = await showNirangDialog<bool>(
       context: context,
       builder: (dialogContext) => NirangAlertDialog(
         title: Text(context.s('fragmentParameters')),
@@ -1293,7 +1293,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     Map<String, String>? descriptions,
   }) async {
     var temporary = current;
-    return showDialog<String>(
+    return showNirangDialog<String>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => NirangAlertDialog(

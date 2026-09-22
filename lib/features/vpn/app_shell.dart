@@ -79,7 +79,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       return;
     }
     final version = WindowsUpdateManager.instance.snapshot.version;
-    final install = await showDialog<bool>(
+    final install = await showNirangDialog<bool>(
       context: context,
       builder: (dialogContext) => NirangAlertDialog(
         icon: const Icon(Icons.download_done_rounded),
@@ -384,7 +384,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   Future<void> _showPerformanceModePrompt() async {
     if (!mounted) return;
-    final enable = await showDialog<bool>(
+    final enable = await showNirangDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => NirangAlertDialog(
@@ -442,7 +442,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             release.latestVersion,
           );
       if (!mounted) return;
-      final action = await showDialog<String>(
+      final action = await showNirangDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           icon: const Icon(Icons.new_releases_outlined),
@@ -510,7 +510,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       if (!mounted) return;
       final body = notes.forLanguage(language);
       if (body.trim().isEmpty) return;
-      await showDialog<void>(
+      await showNirangDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => NirangAlertDialog(
@@ -534,7 +534,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   Future<void> _showTelegramReminder() async {
     if (!mounted) return;
-    final decision = await showDialog<String>(
+    final decision = await showNirangDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => PopScope(

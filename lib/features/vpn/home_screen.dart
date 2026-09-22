@@ -314,7 +314,7 @@ class _ConnectionAction extends StatelessWidget {
       if (!context.mounted) {
         return;
       }
-      final action = await showDialog<String>(
+      final action = await showNirangDialog<String>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           icon: const Icon(Icons.portable_wifi_off_rounded),
@@ -362,7 +362,7 @@ class _ConnectionAction extends StatelessWidget {
       text: '${settings.localHttpPort}',
     );
     try {
-      return await showDialog<({int socks, int http})>(
+      return await showNirangDialog<({int socks, int http})>(
         context: context,
         builder: (dialogContext) => NirangAlertDialog(
           title: Text(context.s('changePorts')),

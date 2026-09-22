@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -213,13 +212,9 @@ class _LiquidGlassFramePainter extends CustomPainter {
       ..addRRect(
         RRect.fromRectAndRadius(
           rect.deflate(.7),
-          Radius.circular(math.max(0, radius - .7)),
+          Radius.circular((radius - .7).clamp(0, double.infinity)),
         ),
       );
-    final square = Rect.fromCircle(
-      center: rect.center,
-      radius: size.longestSide / 2,
-    );
     final glassColor = dark
         ? Colors.white.withValues(alpha: .025)
         : Colors.black.withValues(alpha: .015);
@@ -230,48 +225,14 @@ class _LiquidGlassFramePainter extends CustomPainter {
         ..blendMode = dark ? BlendMode.screen : BlendMode.multiply
         ..style = PaintingStyle.fill,
     );
-    final lightIntensity = dark ? .72 : .95;
-    final ambientStrength = dark ? .20 : .34;
-    final alpha = Curves.easeOut.transform(lightIntensity);
-    final color = Colors.white.withValues(alpha: alpha);
-    const lightAngle = 1.8;
-    final x = math.cos(lightAngle);
-    final y = math.sin(lightAngle);
-    final lightCoverage = .3 + (.5 - .3) * lightIntensity;
-    final alignmentWithShortestSide = (size.aspectRatio < 1 ? y : x).abs();
-    final aspectAdjustment = 1 - 1 / size.aspectRatio;
-    final gradientScale = aspectAdjustment * (1 - alignmentWithShortestSide);
-    final inset = .5 * gradientScale.clamp(0, 1);
-    final secondInset =
-        lightCoverage + (.5 - lightCoverage) * gradientScale.clamp(0, 1);
-    final edge = LinearGradient(
-      begin: Alignment(x, y),
-      end: Alignment(-x, -y),
-      colors: [
-        color,
-        color.withValues(alpha: ambientStrength),
-        color.withValues(alpha: ambientStrength),
-        color,
-      ],
-      stops: [inset, secondInset, 1 - secondInset, 1 - inset],
-    ).createShader(square);
-
+    // A single quiet perimeter keeps the glass readable and consistent.
+    // Directional rim gradients made large Windows surfaces look layered.
     canvas.drawPath(
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1 + lightIntensity
-        ..shader = edge
-        ..blendMode = BlendMode.hardLight,
-    );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..shader = edge
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, .5)
-        ..blendMode = BlendMode.overlay,
+        ..strokeWidth = 1
+        ..color = Colors.white.withValues(alpha: dark ? .18 : .46),
     );
   }
 

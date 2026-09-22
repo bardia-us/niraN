@@ -31,7 +31,7 @@ Future<T?> showGlassMenu<T>({
     barrierDismissible: true,
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
     barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .035),
-    transitionDuration: const Duration(milliseconds: 180),
+    transitionDuration: const Duration(milliseconds: 140),
     pageBuilder: (routeContext, _, _) => Stack(
       children: [
         Positioned(
@@ -76,10 +76,10 @@ Future<T?> showGlassMenu<T>({
       ],
     ),
     transitionBuilder: (_, animation, _, child) => FadeTransition(
-      opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+      opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
       child: ScaleTransition(
-        scale: Tween(begin: .94, end: 1.0).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+        scale: Tween(begin: .96, end: 1.0).animate(
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
         ),
         alignment: Alignment.topLeft,
         child: child,

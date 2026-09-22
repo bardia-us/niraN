@@ -15,7 +15,7 @@ bool isTunPrivilegeError(Object error) =>
 Future<void> showOperationError(BuildContext context, Object error) async {
   if (!context.mounted) return;
   if (isTunPrivilegeError(error)) {
-    await showDialog<void>(
+    await showNirangDialog<void>(
       context: context,
       builder: (dialogContext) => NirangAlertDialog(
         icon: const Icon(Icons.admin_panel_settings_outlined),

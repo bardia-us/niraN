@@ -156,7 +156,14 @@ void main() {
       ).compareTo(SemanticVersion.parse('1.0.4')),
       greaterThan(0),
     );
-    expect(SemanticVersion.parse('v1.0.4+5').toString(), '1.0.4');
+    expect(SemanticVersion.parse('v1.0.4+5').toString(), '1.0.4+5');
+    expect(
+      SemanticVersion.parse(
+        'v1.0.4+6',
+      ).compareTo(SemanticVersion.parse('1.0.4+5')),
+      greaterThan(0),
+    );
+    expect(SemanticVersion.parse('v1.0.4+5').releaseVersion, '1.0.4');
   });
 
   test('light theme surfaces never inherit the dark canvas', () {

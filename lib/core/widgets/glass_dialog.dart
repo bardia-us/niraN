@@ -2,6 +2,29 @@ import 'package:flutter/material.dart';
 
 import 'glass_surface.dart';
 
+Future<T?> showNirangDialog<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool barrierDismissible = true,
+}) => showGeneralDialog<T>(
+  context: context,
+  barrierDismissible: barrierDismissible,
+  barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+  barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .035),
+  transitionDuration: const Duration(milliseconds: 140),
+  pageBuilder: (routeContext, _, _) => builder(routeContext),
+  transitionBuilder: (_, animation, _, child) => FadeTransition(
+    opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+    child: ScaleTransition(
+      scale: Tween<double>(
+        begin: .96,
+        end: 1,
+      ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+      child: child,
+    ),
+  ),
+);
+
 class NirangAlertDialog extends StatelessWidget {
   const NirangAlertDialog({
     super.key,

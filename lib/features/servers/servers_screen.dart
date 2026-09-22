@@ -404,7 +404,7 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
           ),
         );
       case 'delete':
-        final confirmed = await showDialog<bool>(
+        final confirmed = await showNirangDialog<bool>(
           context: context,
           builder: (context) => NirangAlertDialog(
             title: Text(context.s('deleteServer')),
