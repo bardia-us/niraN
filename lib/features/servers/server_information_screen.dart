@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 
-import '../../core/formatters.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/widgets/country_flag_badge.dart';
+import '../vpn/app_controller.dart';
+import 'server_profile_settings_screen.dart';
 
 class ServerInformationScreen extends StatelessWidget {
-  const ServerInformationScreen({required this.server, super.key});
+  const ServerInformationScreen({
+    required this.server,
+    this.controller,
+    super.key,
+  });
 
   final ServerInfo server;
+  final AppController? controller;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -21,19 +27,14 @@ class ServerInformationScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                CountryFlagBadge(
-                  countryCode:
-                      countryCodeFromRemark(server.name) ?? server.country,
-                  width: 38,
-                  height: 27,
-                ),
-                const SizedBox(width: 13),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        server.name,
+                      CountryRemarkText(
+                        remark: server.name,
+                        fallbackCountry: server.country,
+                        maxLines: 2,
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
@@ -82,6 +83,23 @@ class ServerInformationScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        if (controller != null &&
+            const {
+              'VLESS',
+              'TROJAN',
+            }.contains(server.protocol.toUpperCase())) ...[
+          _InfoSection(
+            title: context.s('profileTlsSettings'),
+            children: [
+              ServerProfileSettingsScreen(
+                server: server,
+                controller: controller!,
+                embedded: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         _InfoSection(
           title: context.s('protectedCredentials'),
           subtitle: context.s('credentialsProtected'),

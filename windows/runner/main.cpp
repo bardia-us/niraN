@@ -8,6 +8,7 @@
 #include <string>
 
 #include "flutter_window.h"
+#include "window_size_limits.h"
 #include "utils.h"
 #include "windows/proxy/system_proxy_manager.h"
 
@@ -97,40 +98,41 @@ bool ReadWindowValue(HKEY key, const wchar_t* name, DWORD* value) {
 }
 
 void ApplySavedWindowBounds(HWND window) {
+  RECT desired = {};
+  if (!GetWindowRect(window, &desired)) return;
+  DWORD raw_width = static_cast<DWORD>(std::clamp<int64_t>(
+      static_cast<int64_t>(desired.right) - desired.left, 1, INT_MAX));
+  DWORD raw_height = static_cast<DWORD>(std::clamp<int64_t>(
+      static_cast<int64_t>(desired.bottom) - desired.top, 1, INT_MAX));
+  DWORD raw_state = 0;
   HKEY key = nullptr;
-  if (RegOpenKeyExW(HKEY_CURRENT_USER, kWindowStateKey, 0, KEY_READ, &key) !=
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, kWindowStateKey, 0, KEY_READ, &key) ==
       ERROR_SUCCESS) {
-    return;
+    DWORD x = 0, y = 0, width = 0, height = 0, state = 0;
+    const bool complete = ReadWindowValue(key, L"X", &x) &&
+                          ReadWindowValue(key, L"Y", &y) &&
+                          ReadWindowValue(key, L"Width", &width) &&
+                          ReadWindowValue(key, L"Height", &height);
+    ReadWindowValue(key, L"State", &state);
+    RegCloseKey(key);
+    if (complete) {
+      desired.left = static_cast<int32_t>(x);
+      desired.top = static_cast<int32_t>(y);
+      raw_width = width;
+      raw_height = height;
+      raw_state = state;
+      desired.right = niran::SafeWindowEdge(desired.left, width);
+      desired.bottom = niran::SafeWindowEdge(desired.top, height);
+    }
   }
-  DWORD raw_x = 0, raw_y = 0, raw_width = 0, raw_height = 0, raw_state = 0;
-  const bool complete = ReadWindowValue(key, L"X", &raw_x) &&
-                        ReadWindowValue(key, L"Y", &raw_y) &&
-                        ReadWindowValue(key, L"Width", &raw_width) &&
-                        ReadWindowValue(key, L"Height", &raw_height);
-  ReadWindowValue(key, L"State", &raw_state);
-  RegCloseKey(key);
-  if (!complete) return;
-
-  RECT desired = {static_cast<LONG>(static_cast<int32_t>(raw_x)),
-                  static_cast<LONG>(static_cast<int32_t>(raw_y)), 0, 0};
-  desired.right = desired.left + static_cast<LONG>(raw_width);
-  desired.bottom = desired.top + static_cast<LONG>(raw_height);
   HMONITOR monitor = MonitorFromRect(&desired, MONITOR_DEFAULTTONEAREST);
   MONITORINFO info = {sizeof(info)};
   if (!GetMonitorInfoW(monitor, &info)) return;
-  const int work_width = info.rcWork.right - info.rcWork.left;
-  const int work_height = info.rcWork.bottom - info.rcWork.top;
-  const int width = std::clamp(static_cast<int>(raw_width), 800, work_width);
-  const int height = std::clamp(static_cast<int>(raw_height), 600, work_height);
-  const int work_left = static_cast<int>(info.rcWork.left);
-  const int work_top = static_cast<int>(info.rcWork.top);
-  const int work_right = static_cast<int>(info.rcWork.right);
-  const int work_bottom = static_cast<int>(info.rcWork.bottom);
-  const int x =
-      std::clamp(static_cast<int>(desired.left), work_left, work_right - width);
-  const int y = std::clamp(static_cast<int>(desired.top), work_top,
-                           work_bottom - height);
-  SetWindowPos(window, nullptr, x, y, width, height,
+  const auto limits = niran::GetWindowSizeLimits(window, monitor, true);
+  const auto bounds = niran::CalculateWindowBounds(
+      desired.left, desired.top, raw_width, raw_height,
+      info.rcWork.left, info.rcWork.top, limits);
+  SetWindowPos(window, nullptr, bounds.x, bounds.y, bounds.width, bounds.height,
                SWP_NOACTIVATE | SWP_NOZORDER);
   if (raw_state == 1) ShowWindow(window, SW_MAXIMIZE);
 }

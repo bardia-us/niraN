@@ -44,6 +44,7 @@ class NirangNative {
   static Future<int> tcpPingServer(String id) => _backend.tcpPingServer(id);
   static Future<void> pingAll() => _backend.pingAll();
   static Future<void> cancelPing() => _backend.cancelPing();
+  static Future<void> refreshPublicIp() => _backend.refreshPublicIp();
   static Future<Map<dynamic, dynamic>> updateSettings(
     Map<String, Object?> values,
   ) => _backend.updateSettings(values);

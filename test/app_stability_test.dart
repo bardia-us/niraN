@@ -11,6 +11,8 @@ import 'package:niran/core/widgets/interactive_depth.dart';
 import 'package:niran/features/vpn/app_controller.dart';
 import 'package:niran/main.dart';
 
+import 'support/pump_glass_route.dart';
+
 const _serverA = ServerInfo(
   id: 'a',
   name: 'Server A',
@@ -68,6 +70,21 @@ class _FakeAppController extends AppController {
   int settingsUpdates = 0;
   int logRefreshes = 0;
   int restartRequests = 0;
+  int ipRefreshRequests = 0;
+
+  @override
+  Future<void> refreshPublicIp() async => ipRefreshRequests++;
+
+  @override
+  Future<void> deleteServer(String id) async {
+    final current = state.asData!.value;
+    state = AsyncData(
+      current.copyWith(
+        servers: current.servers.where((s) => s.id != id).toList(),
+      ),
+    );
+  }
+
   final List<(int, int)> reorderRequests = [];
 
   @override
@@ -210,9 +227,179 @@ class _PerformancePromptController extends AppController {
 }
 
 void main() {
-  testWidgets('performance mode prompt is recorded after one explicit choice', (
+  setUpAll(warmGlassRouteTests);
+
+  testWidgets('desktop and compact pages keep layout and sidebar preference', (
     tester,
   ) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    for (final mode in ['light', 'dark']) {
+      for (final width in [540.0, 1280.0]) {
+        tester.view.physicalSize = Size(width, 900);
+        late _FakeAppController controller;
+        await tester.pumpWidget(
+          ProviderScope(
+            key: ValueKey('$mode:$width'),
+            overrides: [
+              appControllerProvider.overrideWith(
+                () => controller = _FakeAppController(themeMode: mode),
+              ),
+            ],
+            child: const NirangApp(),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('home-desktop-grid')), findsOneWidget);
+        for (final destination in ['Servers', 'Settings', 'Logs', 'Home']) {
+          await tester.tap(find.text(destination).last);
+          await tester.pumpAndSettle();
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$mode/$width/$destination',
+          );
+        }
+        if (width >= 1200) {
+          final before = tester.getRect(find.byType(NavigationRail));
+          await controller.updateSettings({'sidebarRight': true});
+          await tester.pumpAndSettle();
+          expect(
+            tester.getRect(find.byType(NavigationRail)).left,
+            greaterThan(before.left),
+          );
+        }
+      }
+    }
+  });
+
+  testWidgets('public IP tap refreshes only while connected', (tester) async {
+    late _FakeAppController controller;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(
+            () => controller = _FakeAppController(
+              connection: const ConnectionInfo(state: 'connected'),
+            ),
+          ),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Public IP'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Public IP'));
+    await tester.pumpAndSettle();
+    expect(controller.ipRefreshRequests, 1);
+    expect(controller.restartRequests, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('confirmed deletion collapses the row before removing its data', (
+    tester,
+  ) async {
+    late _FakeAppController controller;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(
+            () => controller = _FakeAppController(),
+          ),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Servers').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await pumpGlassRoute(tester, find.text('Delete'));
+    await tester.tap(find.text('Delete'));
+    await pumpGlassRoute(tester, find.widgetWithText(FilledButton, 'Delete'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(controller.state.requireValue.servers.map((s) => s.id), ['b']);
+    expect(find.text('Server A'), findsNothing);
+    expect(find.text('Server B'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('IP and ping cards align even when IP has a city subtitle', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(
+            () => _FakeAppController(
+              connection: const ConnectionInfo(
+                state: 'connected',
+                publicIp: '2001:db8::1',
+                publicCity: 'Paris',
+              ),
+            ),
+          ),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final ip = find
+        .ancestor(of: find.text('Public IP'), matching: find.byType(InkWell))
+        .first;
+    final ping = find
+        .ancestor(of: find.text('Ping'), matching: find.byType(InkWell))
+        .first;
+    expect(tester.getRect(ip).height, tester.getRect(ping).height);
+    expect(tester.getRect(ip).top, tester.getRect(ping).top);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'all country flags survive a name with prefix middle and suffix flags',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appControllerProvider.overrideWith(
+              () => _FakeAppController(
+                initialServers: const [
+                  ServerInfo(
+                    id: 'multi',
+                    name: '🇩🇪 Frankfurt 🇫🇷 route 🇳🇱',
+                    country: 'DE',
+                    protocol: 'VLESS',
+                    transport: 'TCP',
+                    security: 'TLS',
+                    port: 443,
+                    selected: true,
+                    status: 'idle',
+                  ),
+                ],
+              ),
+            ),
+          ],
+          child: const NirangApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final codes = tester
+          .widgetList<CountryFlagBadge>(find.byType(CountryFlagBadge))
+          .map((b) => b.countryCode)
+          .toSet();
+      expect(codes, containsAll(['DE', 'FR', 'NL']));
+      expect(find.byType(CountryRemarkText), findsOneWidget);
+      final remark = tester.widget<CountryRemarkText>(
+        find.byType(CountryRemarkText),
+      );
+      expect(remark.remark, '🇩🇪 Frankfurt 🇫🇷 route 🇳🇱');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Windows no longer prompts for performance mode', (tester) async {
     late _PerformancePromptController controller;
     await tester.pumpWidget(
       ProviderScope(
@@ -226,13 +413,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Performance Mode'), findsOneWidget);
-    await tester.tap(find.text('Keep full effects'));
-    await tester.pumpAndSettle();
+    expect(find.text('Performance Mode'), findsNothing);
+    expect(find.text('Keep full effects'), findsNothing);
 
     expect(
       controller.state.asData!.value.settings.performanceModePrompted,
-      isTrue,
+      isFalse,
     );
     expect(controller.state.asData!.value.settings.performanceMode, isFalse);
     expect(tester.takeException(), isNull);
@@ -344,23 +530,24 @@ void main() {
 
     await controller.updateSettings({'performanceMode': true});
     await tester.pumpAndSettle();
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(find.byType(BackdropFilter), findsWidgets);
     await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
-    await tester.pumpAndSettle();
+    await pumpGlassRoute(tester, find.text('Server information'));
     expect(find.text('Server information'), findsOneWidget);
     expect(find.text('Delete'), findsOneWidget);
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(find.byType(BackdropFilter), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('server reorder starts immediately only from keyed handles', (
+  testWidgets('server reorder uses a held row without visible drag handles', (
     tester,
   ) async {
+    late _FakeAppController controller;
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           appControllerProvider.overrideWith(
-            () => _FakeAppController(
+            () => controller = _FakeAppController(
               initialServers: const [_serverA, _serverB, _serverC],
             ),
           ),
@@ -372,13 +559,24 @@ void main() {
     await tester.tap(find.byIcon(Icons.dns_outlined));
     await tester.pumpAndSettle();
 
-    expect(find.byType(ReorderableDragStartListener), findsNWidgets(3));
-    expect(find.byType(ReorderableDelayedDragStartListener), findsNothing);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
+    expect(find.byType(ReorderableDelayedDragStartListener), findsNWidgets(3));
+    expect(find.byIcon(Icons.drag_indicator_rounded), findsNothing);
     for (final id in const ['a', 'b', 'c']) {
       final handle = find.byKey(ValueKey('server-drag-$id'));
       expect(handle, findsOneWidget);
-      expect(tester.widget(handle), isA<ReorderableDragStartListener>());
+      expect(tester.widget(handle), isA<ReorderableDelayedDragStartListener>());
     }
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('Server A')),
+    );
+    await tester.pump(const Duration(milliseconds: 550));
+    await gesture.moveBy(const Offset(0, 150));
+    await tester.pump(const Duration(milliseconds: 220));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(controller.reorderRequests, isNotEmpty);
+    expect(controller.state.requireValue.servers.first.id, isNot('a'));
     expect(tester.takeException(), isNull);
   });
 
@@ -445,7 +643,7 @@ void main() {
       );
       expect(
         toolbar.right - actions.right,
-        lessThanOrEqualTo(6),
+        inInclusiveRange(8, 16),
         reason: '$width',
       );
       expect(tester.takeException(), isNull, reason: '$width');
@@ -471,6 +669,9 @@ void main() {
   testWidgets('profile TLS editor validates FinalMask JSON before saving', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1000, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(
       ProviderScope(
         overrides: [appControllerProvider.overrideWith(_FakeAppController.new)],
@@ -480,15 +681,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.dns_outlined));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.tap(find.byIcon(Icons.more_vert_rounded).at(1));
+    await pumpGlassRoute(tester, find.text('Server information'));
+    expect(find.text('Profile TLS/CDN settings'), findsNothing);
+    await tester.tap(find.text('Server information'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Profile TLS/CDN settings'));
+    await tester.ensureVisible(find.text('Profile TLS/CDN settings'));
     await tester.pumpAndSettle();
 
     expect(find.text('Fingerprint'), findsOneWidget);
     expect(find.text('Cipher suites'), findsOneWidget);
     expect(find.text('FinalMask JSON'), findsOneWidget);
     await tester.enterText(find.byType(TextField).at(2), '{bad json');
+    await tester.ensureVisible(find.text('Save'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Save'));
     await tester.pump();
     expect(find.text('Invalid JSON'), findsOneWidget);
@@ -553,31 +759,41 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('restart service is hidden during a restart transition', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          appControllerProvider.overrideWith(
-            () => _FakeAppController(
-              connection: const ConnectionInfo(
-                state: 'restarting',
-                serverId: 'a',
-                serverName: 'Server A',
+  testWidgets(
+    'restart card stays visible and disabled during a restart transition',
+    (tester) async {
+      late _FakeAppController controller;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appControllerProvider.overrideWith(
+              () => controller = _FakeAppController(
+                connection: const ConnectionInfo(
+                  state: 'restarting',
+                  serverId: 'a',
+                  serverName: 'Server A',
+                ),
               ),
             ),
-          ),
-        ],
-        child: const NirangApp(),
-      ),
-    );
-    await tester.pump();
+          ],
+          child: const NirangApp(),
+        ),
+      );
+      await tester.pump();
 
-    expect(find.text('Restart Service'), findsNothing);
-    expect(find.text('Restarting…'), findsWidgets);
-    expect(tester.takeException(), isNull);
-  });
+      final restart = find.text('Restart Service');
+      expect(restart, findsOneWidget);
+      final action = find
+          .ancestor(of: restart, matching: find.byType(InkWell))
+          .first;
+      expect(tester.widget<InkWell>(action).onTap, isNull);
+      await tester.tap(restart);
+      await tester.pump();
+      expect(controller.restartRequests, 0);
+      expect(find.text('Restarting…'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'settings picker cancel discards changes and apply commits once',
@@ -608,7 +824,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Theme'));
-      await tester.pumpAndSettle();
+      await pumpGlassRoute(tester, find.byType(NirangAlertDialog));
       await tester.tap(find.text('Dark'));
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -628,7 +844,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Theme'));
-      await tester.pumpAndSettle();
+      await pumpGlassRoute(tester, find.byType(NirangAlertDialog));
       await tester.tap(find.text('Dark'));
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
@@ -668,7 +884,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Remote DNS'));
-    await tester.pumpAndSettle();
+    await pumpGlassRoute(tester, find.byType(TextFormField));
     await tester.enterText(find.byType(TextFormField), 'not a dns value');
     await tester.tap(find.text('Save'));
     await tester.pump();
@@ -694,7 +910,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Remote DNS'));
-    await tester.pumpAndSettle();
+    await pumpGlassRoute(tester, find.byType(TextFormField));
     await tester.enterText(
       find.byType(TextFormField),
       '9.9.9.9,https://dns.google/dns-query',
@@ -742,7 +958,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Proxy target resolution'));
-      await tester.pumpAndSettle();
+      await pumpGlassRoute(tester, find.text('IPv4, then IPv6'));
 
       expect(find.text('IPv4, then IPv6'), findsOneWidget);
       expect(find.text('IPv6, then IPv4'), findsOneWidget);
@@ -777,8 +993,13 @@ void main() {
         250,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.tap(find.text('VPN MTU'));
+      await Scrollable.ensureVisible(
+        tester.element(find.text('VPN MTU')),
+        alignment: .5,
+      );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('VPN MTU'), warnIfMissed: true);
+      await pumpGlassRoute(tester, find.byType(TextFormField));
 
       await tester.enterText(find.byType(TextFormField), '100');
       await tester.tap(find.text('Save'));
@@ -791,16 +1012,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.state.asData!.value.settings.vpnMtu, 1500);
 
-      await tester.tap(find.text('VPN MTU'));
+      await Scrollable.ensureVisible(
+        tester.element(find.text('VPN MTU')),
+        alignment: .5,
+      );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('VPN MTU'), warnIfMissed: true);
+      await pumpGlassRoute(tester, find.byType(TextFormField));
       await tester.enterText(find.byType(TextFormField), '1400');
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(controller.state.asData!.value.settings.vpnMtu, 1400);
       expect(find.textContaining('1400'), findsOneWidget);
 
-      await tester.tap(find.text('VPN MTU'));
+      await Scrollable.ensureVisible(
+        tester.element(find.text('VPN MTU')),
+        alignment: .5,
+      );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('VPN MTU'), warnIfMissed: true);
+      await pumpGlassRoute(tester, find.byType(TextFormField));
       expect(
         tester
             .widget<TextFormField>(find.byType(TextFormField))
@@ -814,7 +1045,7 @@ void main() {
     },
   );
 
-  testWidgets('routing and domain strategy preserve cancel and sync apply', (
+  testWidgets('independent routing switches and domain strategy sync apply', (
     tester,
   ) async {
     late _FakeAppController controller;
@@ -833,23 +1064,23 @@ void main() {
     await tester.pumpAndSettle();
     await _expandSettingsSection(tester, 'Routing');
     await tester.scrollUntilVisible(
-      find.text('Routing'),
+      find.text('Bypass Iran'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.widgetWithText(ListTile, 'Routing'));
+    // Settings now scrolls behind the AppBar: place the tap below the chrome.
+    await Scrollable.ensureVisible(
+      tester.element(find.text('Bypass Iran')),
+      alignment: .5,
+    );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Bypass Iran'), warnIfMissed: true);
+    await tester.pumpAndSettle();
+    expect(controller.state.asData!.value.settings.bypassIran, isFalse);
+    expect(controller.state.asData!.value.settings.customRulesEnabled, isFalse);
     await tester.tap(find.text('Bypass Iran'));
-    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(controller.state.asData!.value.settings.routingMode, 'global');
-
-    await tester.tap(find.widgetWithText(ListTile, 'Routing'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Bypass Iran'));
-    await tester.tap(find.text('Apply'));
-    await tester.pumpAndSettle();
-    expect(controller.state.asData!.value.settings.routingMode, 'bypassIran');
+    expect(controller.state.asData!.value.settings.bypassIran, isTrue);
 
     await Scrollable.ensureVisible(
       tester.element(find.text('ROUTING')),
@@ -874,7 +1105,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Domain strategy'));
-    await tester.pumpAndSettle();
+    await pumpGlassRoute(tester, find.text('IPOnDemand'));
     await tester.tap(find.text('IPOnDemand').last);
     await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
@@ -955,6 +1186,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('120 ms'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('120 ms'));
     await tester.tap(find.text('120 ms'));
     await tester.pumpAndSettle();
@@ -993,7 +1226,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Theme'));
-      await tester.pumpAndSettle();
+      await pumpGlassRoute(tester, find.byType(NirangAlertDialog));
 
       expect(find.byType(NirangAlertDialog), findsOneWidget);
       for (var i = 1; i <= 20; i++) {

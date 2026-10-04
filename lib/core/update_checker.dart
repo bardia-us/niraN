@@ -85,7 +85,7 @@ class ReleaseAsset {
 
   SemanticVersion? get version {
     final match = RegExp(
-      r'^niraN-(?:v)?(\d+\.\d+\.\d+)-windows-x64(?:-setup)?\.(?:zip|exe)$',
+      r'^niraN-(?:v)?(\d+\.\d+\.\d+(?:\+\d+)?)-windows-x64(?:-setup)?\.(?:zip|exe)$',
       caseSensitive: false,
     ).firstMatch(name);
     if (match == null) return null;
@@ -94,18 +94,25 @@ class ReleaseAsset {
 
   static WindowsUpdatePackage? packageFromName(String name) {
     if (RegExp(
-      r'^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64\.zip$',
+      r'^niraN-(?:v)?\d+\.\d+\.\d+(?:\+\d+)?-windows-x64\.zip$',
       caseSensitive: false,
     ).hasMatch(name)) {
       return WindowsUpdatePackage.portableZip;
     }
     if (RegExp(
-      r'^niraN-(?:v)?\d+\.\d+\.\d+-windows-x64(?:-setup)?\.exe$',
+      r'^niraN-(?:v)?\d+\.\d+\.\d+(?:\+\d+)?-windows-x64(?:-setup)?\.exe$',
       caseSensitive: false,
     ).hasMatch(name)) {
       return WindowsUpdatePackage.setupExe;
     }
     return null;
+  }
+
+  bool matchesVersion(SemanticVersion release) {
+    final parsed = version;
+    return parsed != null &&
+        parsed.releaseVersion == release.releaseVersion &&
+        (parsed.build == 0 || parsed.build == release.build);
   }
 }
 
@@ -206,7 +213,38 @@ ReleaseCheckResult parseGitHubRelease(
   Map<String, dynamic> payload,
   String currentVersion,
 ) {
-  final latest = SemanticVersion.parse('${payload['tag_name'] ?? ''}');
+  final tagVersion = SemanticVersion.parse('${payload['tag_name'] ?? ''}');
+  var latestBuild = tagVersion.build;
+  final declaredBuild =
+      int.tryParse(
+        RegExp(
+              r'<!--\s*niran-build:\s*(\d+)\s*-->',
+              caseSensitive: false,
+            ).firstMatch('${payload['body'] ?? ''}')?.group(1) ??
+            '',
+      ) ??
+      0;
+  if (declaredBuild > latestBuild) latestBuild = declaredBuild;
+  final rawAssets = payload['assets'];
+  if (rawAssets is List) {
+    for (final raw in rawAssets.whereType<Map>()) {
+      final candidate = ReleaseAsset(
+        name: '${raw['name'] ?? ''}',
+        url: Uri(),
+        size: 0,
+      ).version;
+      if (candidate?.releaseVersion == tagVersion.releaseVersion &&
+          candidate!.build > latestBuild) {
+        latestBuild = candidate.build;
+      }
+    }
+  }
+  final latest = SemanticVersion(
+    tagVersion.major,
+    tagVersion.minor,
+    tagVersion.patch,
+    latestBuild,
+  );
   final releaseUrl = Uri.tryParse('${payload['html_url'] ?? ''}');
   if (releaseUrl == null ||
       releaseUrl.scheme != 'https' ||
@@ -241,12 +279,18 @@ ReleaseCheckResult parseGitHubRelease(
         size: (value['size'] as num?)?.toInt() ?? 0,
         sha256: digest,
       );
-      if (asset.version?.compareTo(latest) != 0) continue;
+      if (!asset.matchesVersion(latest)) continue;
       switch (package) {
         case WindowsUpdatePackage.portableZip:
-          portableAsset ??= asset;
+          if (portableAsset == null ||
+              (asset.version!.build > portableAsset.version!.build)) {
+            portableAsset = asset;
+          }
         case WindowsUpdatePackage.setupExe:
-          setupAsset ??= asset;
+          if (setupAsset == null ||
+              (asset.version!.build > setupAsset.version!.build)) {
+            setupAsset = asset;
+          }
       }
     }
   }

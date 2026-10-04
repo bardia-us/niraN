@@ -28,6 +28,7 @@ abstract interface class NiranPlatformBackend {
   Future<int> tcpPingServer(String id);
   Future<void> pingAll();
   Future<void> cancelPing();
+  Future<void> refreshPublicIp();
   Future<Map<dynamic, dynamic>> updateSettings(Map<String, Object?> values);
   Future<List<dynamic>> getLogs();
   Future<void> clearLogs();

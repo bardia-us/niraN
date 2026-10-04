@@ -36,7 +36,9 @@ void main() {
       expect(info.reads, 0);
       expect(transport.payloads, isEmpty);
 
+      final firstSyncWrite = _persistedSync(directory, transport, 1);
       await service.accept();
+      await firstSyncWrite;
       await _waitFor(() => transport.payloads.isNotEmpty);
       final payload = transport.payloads.single;
       expect(payload.keys.toSet(), {
@@ -58,13 +60,11 @@ void main() {
         ),
       );
 
-      final local =
-          jsonDecode(
-                await File(
-                  '${directory.path}${Platform.pathSeparator}device-registration.json',
-                ).readAsString(),
-              )
-              as Map<String, dynamic>;
+      final local = jsonDecode(
+        await File(
+          '${directory.path}${Platform.pathSeparator}device-registration.json',
+        ).readAsString(),
+      ) as Map<String, dynamic>;
       expect(local['consent_accepted'], isTrue);
       expect(local['consent_version'], 2);
       expect(local['installation_id'], payload['installation_id']);
@@ -81,7 +81,9 @@ void main() {
         dataDirectory: directory,
         clock: () => DateTime.utc(2026, 8, 29, 12),
       );
+      final secondSyncWrite = _persistedSync(directory, transport, 2);
       expect(await second.initialize(), isTrue);
+      await secondSyncWrite;
       await _waitFor(() => transport.payloads.length == 2);
       expect(
         transport.payloads.last['installation_id'],
@@ -120,6 +122,23 @@ void main() {
       expect(transport.payloads, isEmpty);
     },
   );
+
+  testWidgets('pending access verification paints a branded first frame', (
+    tester,
+  ) async {
+    final coordinator = _PendingCoordinator();
+    await tester.pumpWidget(
+      NiranRegistrationBootstrap(
+        coordinator: coordinator,
+        child: const MaterialApp(home: Text('HOME_READY')),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('niraN'), findsOneWidget);
+    expect(find.text('HOME_READY'), findsNothing);
+    coordinator.pending.complete(false);
+    await tester.pumpAndSettle();
+  });
 
   testWidgets('Home child is not built until registration is accepted', (
     tester,
@@ -182,6 +201,26 @@ void main() {
   });
 }
 
+// Observe the completed atomic rename without opening/locking its destination
+// while a background sync still writes it (important on Windows).
+Future<void> _persistedSync(
+  Directory directory,
+  _RecordingTransport transport,
+  int payloadCount,
+) async {
+  await directory
+      .watch()
+      .firstWhere(
+        (event) =>
+            transport.payloads.length >= payloadCount &&
+            (event.path.endsWith('device-registration.json') ||
+                (event is FileSystemMoveEvent &&
+                    (event.destination?.endsWith('device-registration.json') ??
+                        false))),
+      )
+      .timeout(const Duration(seconds: 10));
+}
+
 Future<void> _waitFor(bool Function() condition) async {
   final deadline = DateTime.now().add(const Duration(seconds: 5));
   while (!condition()) {
@@ -217,6 +256,16 @@ final class _RecordingTransport implements DeviceRegistrationTransport {
   Future<void> send(Map<String, Object?> payload) async {
     payloads.add(Map<String, Object?>.from(payload));
   }
+}
+
+final class _PendingCoordinator implements DeviceRegistrationCoordinator {
+  final pending = Completer<bool>();
+  @override
+  Future<bool> initialize() => pending.future;
+  @override
+  Future<void> accept() async {}
+  @override
+  Future<void> exitApplication() async {}
 }
 
 final class _FakeCoordinator implements DeviceRegistrationCoordinator {

@@ -44,6 +44,7 @@ class WindowsBackendBridge {
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   XrayProcessManager xray_;
+  XrayProcessManager singbox_proxy_;
   XrayProcessManager singbox_tun_;
   XrayProcessManager speedtest_xray_;
   SystemProxyManager proxy_;
@@ -53,6 +54,7 @@ class WindowsBackendBridge {
   std::wstring startup_proxy_error_;
   HWND window_ = nullptr;
   std::vector<std::thread> workers_;
+  std::vector<uint8_t> feedback_wave_;
   std::atomic_bool tun_running_ = false;
   unsigned short local_http_port_ = 10809;
 };

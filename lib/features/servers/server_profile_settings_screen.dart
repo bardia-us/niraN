@@ -5,17 +5,20 @@ import 'package:flutter/services.dart';
 
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
+import '../../core/widgets/operation_error.dart';
 import '../vpn/app_controller.dart';
 
 class ServerProfileSettingsScreen extends StatefulWidget {
   const ServerProfileSettingsScreen({
     required this.server,
     required this.controller,
+    this.embedded = false,
     super.key,
   });
 
   final ServerInfo server;
   final AppController controller;
+  final bool embedded;
 
   @override
   State<ServerProfileSettingsScreen> createState() =>
@@ -29,6 +32,9 @@ class _ServerProfileSettingsScreenState
   late final TextEditingController _finalMask;
   bool _saving = false;
   String? _finalMaskError;
+  String? _fingerprintError;
+
+  bool get _isReality => widget.server.security.toLowerCase() == 'reality';
 
   @override
   void initState() {
@@ -47,6 +53,7 @@ class _ServerProfileSettingsScreenState
   }
 
   String? _validateFinalMask() {
+    if (_isReality) return null;
     final value = _finalMask.text.trim();
     if (value.isEmpty) return null;
     try {
@@ -59,16 +66,35 @@ class _ServerProfileSettingsScreenState
 
   Future<void> _save() async {
     final error = _validateFinalMask();
-    setState(() => _finalMaskError = error);
-    if (error != null) return;
+    final fingerprintError =
+        _isReality && _fingerprint.text.trim().toLowerCase() == 'unsafe'
+        ? context.s('realityFingerprintUnsupported')
+        : null;
+    setState(() {
+      _finalMaskError = error;
+      _fingerprintError = fingerprintError;
+    });
+    if (error != null || fingerprintError != null) return;
     setState(() => _saving = true);
     try {
       await widget.controller.updateServerProfile(widget.server.id, {
         'fp': _fingerprint.text,
-        'cs': _cipherSuites.text,
-        'fm': _finalMask.text,
+        // The native API replaces all three options. Preserve fields that the
+        // Reality editor does not expose instead of clearing subscription data.
+        'cs': _isReality ? widget.server.cipherSuites : _cipherSuites.text,
+        'fm': _isReality ? widget.server.finalMask : _finalMask.text,
       });
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        if (widget.embedded) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(context.s('save'))));
+        } else {
+          Navigator.pop(context);
+        }
+      }
+    } on Object catch (error) {
+      if (mounted) await showOperationError(context, error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -87,23 +113,34 @@ class _ServerProfileSettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(context.s('profileTlsSettings'))),
-    body: ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
+  Widget build(BuildContext context) {
+    final fields = <Widget>[
+      if (!widget.embedded)
         Text(
           widget.server.name,
           style: Theme.of(context).textTheme.titleMedium,
         ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _fingerprint,
-          decoration: InputDecoration(
-            labelText: context.s('fingerprint'),
-            helperText: 'chrome, firefox, safari, edge, random, unsafe',
-          ),
+      if (!widget.embedded) const SizedBox(height: 16),
+      if (_isReality) ...[
+        Text(context.s('realityProfileHint')),
+        const SizedBox(height: 14),
+      ],
+      TextField(
+        controller: _fingerprint,
+        onChanged: (_) {
+          if (_fingerprintError != null) {
+            setState(() => _fingerprintError = null);
+          }
+        },
+        decoration: InputDecoration(
+          labelText: context.s('fingerprint'),
+          helperText: _isReality
+              ? 'chrome, firefox, safari, edge, random'
+              : 'chrome, firefox, safari, edge, random, unsafe',
+          errorText: _fingerprintError,
         ),
+      ),
+      if (!_isReality) ...[
         const SizedBox(height: 14),
         TextField(
           controller: _cipherSuites,
@@ -132,39 +169,55 @@ class _ServerProfileSettingsScreenState
             errorText: _finalMaskError,
           ),
         ),
-        if (widget.server.allowInsecure) ...[
-          const SizedBox(height: 14),
-          Card(
-            color: Theme.of(context).colorScheme.errorContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(context.s('allowInsecureUnsupported')),
-            ),
+      ],
+      if (widget.server.allowInsecure) ...[
+        const SizedBox(height: 14),
+        Card(
+          color: Theme.of(context).colorScheme.errorContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(context.s('allowInsecureUnsupported')),
           ),
-        ],
-        const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton.icon(
-              onPressed: _copyShareLink,
-              icon: const Icon(Icons.copy_rounded),
-              label: Text(context.s('copyShareLink')),
-            ),
-            const SizedBox(width: 10),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save_rounded),
-              label: Text(context.s('save')),
-            ),
-          ],
         ),
       ],
-    ),
-  );
+      const SizedBox(height: 20),
+      Wrap(
+        alignment: WrapAlignment.end,
+        spacing: 10,
+        runSpacing: 8,
+        children: [
+          TextButton.icon(
+            onPressed: _copyShareLink,
+            icon: const Icon(Icons.copy_rounded),
+            label: Text(context.s('copyShareLink')),
+          ),
+          FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save_rounded),
+            label: Text(context.s('save')),
+          ),
+        ],
+      ),
+    ];
+    final editor = widget.embedded
+        ? Padding(
+            padding: const EdgeInsets.only(top: 6, bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: fields,
+            ),
+          )
+        : ListView(padding: const EdgeInsets.all(18), children: fields);
+    return widget.embedded
+        ? editor
+        : Scaffold(
+            appBar: AppBar(title: Text(context.s('profileTlsSettings'))),
+            body: editor,
+          );
+  }
 }

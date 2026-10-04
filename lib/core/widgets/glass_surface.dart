@@ -4,25 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/vpn/app_controller.dart';
+import 'snapshot_glass.dart';
+import 'live_liquid_glass.dart';
 
 enum GlassSurfaceStyle { liquid, flat }
 
 /// Windows-compatible counterpart of niraNG's Liquid Glass surface.
 ///
-/// The fragment shader used on Android/Impeller is not supported by Flutter's
-/// Windows Skia renderer. This keeps the same visual recipe using one live
-/// backdrop pass, luminance-preserving saturation, a light tint and specular
-/// edge/depth painting. Performance mode deliberately remains opaque.
+/// Opted-in surfaces use live image-filter shaders when the Windows renderer
+/// supports them. Unsupported renderers keep the prepared snapshot/frosted
+/// fallback; flat config rows never receive the 3D lens.
 class GlassSurface extends ConsumerWidget {
   const GlassSurface({
     required this.child,
     super.key,
     this.padding,
     this.radius = 16,
-    this.blur = 18,
+    this.blur = 16,
     this.saturation = 1.25,
     this.overlayColor,
     this.style = GlassSurfaceStyle.liquid,
+    this.liveLiquid = false,
   });
 
   final Widget child;
@@ -32,6 +34,7 @@ class GlassSurface extends ConsumerWidget {
   final double saturation;
   final Color? overlayColor;
   final GlassSurfaceStyle style;
+  final bool liveLiquid;
 
   static List<double> _saturationMatrix(double saturation) {
     const lumR = .299;
@@ -95,6 +98,16 @@ class GlassSurface extends ConsumerWidget {
       );
     }
 
+    if (liveLiquid && liveGlassReady) {
+      return LiveLiquidSurface(
+        radius: radius,
+        blur: blur,
+        saturation: saturation,
+        overlayColor: overlayColor,
+        child: content,
+      );
+    }
+
     // This is the Windows/Skia equivalent used by the approved Glass Test
     // Lab. Keep detail destruction and colour transmission independent: blur
     // removes glyph detail while the luminance-preserving saturation keeps
@@ -132,14 +145,24 @@ class GlassSurface extends ConsumerWidget {
           fit: StackFit.passthrough,
           children: [
             Positioned.fill(
-              child: BackdropFilter(
-                filter: filter,
-                // srcOver is the only BackdropFilter blend mode guaranteed
-                // across Flutter renderers. srcATop preserves the destination
-                // alpha and allowed the sharp backdrop to dominate on Windows,
-                // making higher sigma values appear to do nothing.
-                blendMode: BlendMode.srcOver,
-                child: const SizedBox.expand(),
+              child: SnapshotGlassBackdrop(
+                radius: radius,
+                blur: blur,
+                saturation: saturation,
+                fallback: BackdropFilter.grouped(
+                  filter: filter,
+                  // srcOver is the only BackdropFilter blend mode guaranteed
+                  // across Flutter renderers. srcATop preserves the destination
+                  // alpha and allowed the sharp backdrop to dominate on Windows,
+                  // making higher sigma values appear to do nothing.
+                  blendMode: BlendMode.srcOver,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: ColoredBox(
+                color: scheme.surface.withValues(alpha: dark ? .48 : .44),
               ),
             ),
             if (overlayColor case final color?)
@@ -147,7 +170,13 @@ class GlassSurface extends ConsumerWidget {
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(
-                  painter: _LiquidGlassFramePainter(dark: dark, radius: radius),
+                  painter: _LiquidGlassFramePainter(
+                    dark: dark,
+                    radius: radius,
+                    edgeColor: scheme.outline.withValues(
+                      alpha: dark ? .32 : .26,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -179,35 +208,35 @@ class _FlatGlassSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ClipRRect(
     borderRadius: borderRadius,
-    child: BackdropFilter(
-      filter: ImageFilter.blur(
-        sigmaX: blur.clamp(0, 4),
-        sigmaY: blur.clamp(0, 4),
-        tileMode: TileMode.mirror,
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Color.alphaBlend(
-            overlayColor ?? Colors.transparent,
-            scheme.surface.withValues(alpha: dark ? .54 : .66),
-          ),
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: dark ? .34 : .48),
-            width: .8,
-          ),
-          borderRadius: borderRadius,
+    // Tonal content cards are not navigation glass. A filter per server row
+    // multiplies GPU passes with list length without adding useful depth.
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(
+          overlayColor ?? Colors.transparent,
+          scheme.surface.withValues(alpha: dark ? .54 : .66),
         ),
-        child: child,
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: dark ? .34 : .48),
+          width: .8,
+        ),
+        borderRadius: borderRadius,
       ),
+      child: child,
     ),
   );
 }
 
 class _LiquidGlassFramePainter extends CustomPainter {
-  const _LiquidGlassFramePainter({required this.dark, required this.radius});
+  const _LiquidGlassFramePainter({
+    required this.dark,
+    required this.radius,
+    required this.edgeColor,
+  });
 
   final bool dark;
   final double radius;
+  final Color edgeColor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -237,11 +266,13 @@ class _LiquidGlassFramePainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: dark ? .18 : .46),
+        ..color = edgeColor,
     );
   }
 
   @override
   bool shouldRepaint(covariant _LiquidGlassFramePainter oldDelegate) =>
-      dark != oldDelegate.dark || radius != oldDelegate.radius;
+      dark != oldDelegate.dark ||
+      radius != oldDelegate.radius ||
+      edgeColor != oldDelegate.edgeColor;
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'core/localization/app_strings.dart';
 import 'core/diagnostics.dart';
@@ -15,8 +16,11 @@ import 'core/theme/app_scroll_behavior.dart';
 import 'features/vpn/app_controller.dart';
 import 'features/vpn/app_shell.dart';
 import 'features/registration/registration_bootstrap.dart';
+import 'core/widgets/windows_glass_shader_warmup.dart';
+import 'core/widgets/live_liquid_glass.dart';
 
-void main() {
+Future<void> main() async {
+  PaintingBinding.shaderWarmUp = const WindowsGlassShaderWarmUp();
   WidgetsFlutterBinding.ensureInitialized();
   FlutterError.onError = (details) {
     FlutterError.dumpErrorToConsole(details);
@@ -43,9 +47,28 @@ void main() {
       ),
     ),
   );
+  final startupClock = Stopwatch()..start();
+  // Start asynchronous preparation without holding the first Flutter frame.
+  // Registration runs concurrently; the product child still waits for both.
+  final graphicsReady = prepareLiveGlass().then((prepared) {
+    debugPrint(
+      'niraN graphics ready at ${startupClock.elapsedMilliseconds}ms: '
+      'shaderFilter=${ImageFilter.isShaderFilterSupported}, programsReady=$prepared',
+    );
+  });
   runApp(
-    NiranRegistrationBootstrap(child: const ProviderScope(child: NirangApp())),
+    LiquidGlassWidgets.wrap(
+      brightnessResolver: Theme.maybeBrightnessOf,
+      adaptiveQuality: false,
+      child: NiranRegistrationBootstrap(
+        graphicsReady: graphicsReady,
+        child: const ProviderScope(child: NirangApp()),
+      ),
+    ),
   );
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    debugPrint('niraN first frame at ${startupClock.elapsedMilliseconds}ms');
+  });
 }
 
 Future<void> _recordFrameworkError(String message, StackTrace? stack) async {
@@ -73,7 +96,8 @@ class NirangApp extends ConsumerWidget {
         return (
           themeMode: settings.themeModeValue,
           language: settings.language,
-          performanceMode: settings.performanceMode,
+          accent: settings.accentColor,
+          darkStyle: settings.darkStyle,
         );
       }),
     );
@@ -82,20 +106,22 @@ class NirangApp extends ConsumerWidget {
       navigatorObservers: [nirangRouteObserver],
       title: 'niraN',
       debugShowCheckedModeBanner: false,
-      theme: appearance.performanceMode
-          ? AppTheme.lightPerformance
-          : AppTheme.light,
-      darkTheme: appearance.performanceMode
-          ? AppTheme.darkPerformance
-          : AppTheme.dark,
+      theme: AppTheme.personalized(
+        Brightness.light,
+        reducedEffects: false,
+        accent: appearance.accent,
+        darkStyle: appearance.darkStyle,
+      ),
+      darkTheme: AppTheme.personalized(
+        Brightness.dark,
+        reducedEffects: false,
+        accent: appearance.accent,
+        darkStyle: appearance.darkStyle,
+      ),
       themeMode: appearance.themeMode,
-      themeAnimationDuration: Duration(
-        milliseconds: appearance.performanceMode ? 70 : 120,
-      ),
+      themeAnimationDuration: const Duration(milliseconds: 120),
       themeAnimationCurve: Curves.easeOutCubic,
-      scrollBehavior: NirangScrollBehavior(
-        reducedEffects: appearance.performanceMode,
-      ),
+      scrollBehavior: const NirangScrollBehavior(reducedEffects: false),
       locale: Locale(appearance.language),
       supportedLocales: AppStrings.supportedLocales,
       localizationsDelegates: const [
@@ -107,19 +133,26 @@ class NirangApp extends ConsumerWidget {
       builder: (context, child) {
         final theme = Theme.of(context);
         final dark = theme.brightness == Brightness.dark;
-        return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
-            statusBarBrightness: dark ? Brightness.dark : Brightness.light,
-            systemNavigationBarColor: theme.colorScheme.surface,
-            systemNavigationBarDividerColor: theme.colorScheme.outlineVariant,
-            systemNavigationBarIconBrightness: dark
-                ? Brightness.light
-                : Brightness.dark,
-            systemNavigationBarContrastEnforced: false,
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            disableAnimations: MediaQuery.disableAnimationsOf(context),
           ),
-          child: child ?? const SizedBox.shrink(),
+          child: AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness: dark
+                  ? Brightness.light
+                  : Brightness.dark,
+              statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+              systemNavigationBarColor: theme.colorScheme.surface,
+              systemNavigationBarDividerColor: theme.colorScheme.outlineVariant,
+              systemNavigationBarIconBrightness: dark
+                  ? Brightness.light
+                  : Brightness.dark,
+              systemNavigationBarContrastEnforced: false,
+            ),
+            child: child ?? const SizedBox.shrink(),
+          ),
         );
       },
       home: const AppShell(),

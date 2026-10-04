@@ -24,10 +24,14 @@ class XrayProcessManager {
   std::vector<std::string> DrainLogs();
 
  private:
+  bool StopLocked(std::wstring* error);
   void ReadOutput(HANDLE pipe);
   bool RequestGracefulStop(DWORD process_id, HANDLE process);
   void CloseHandles();
 
+  // Handle/log reads use mutex_; complete Start/Stop lifecycles need a
+  // separate lock so simultaneous callers cannot join the same thread.
+  std::mutex lifecycle_mutex_;
   std::mutex mutex_;
   HANDLE process_ = nullptr;
   HANDLE job_ = nullptr;

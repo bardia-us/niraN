@@ -95,7 +95,14 @@ bool SystemProxyManager::Enable(unsigned short http_port,
   Settings desired;
   desired.flags = PROXY_TYPE_DIRECT | PROXY_TYPE_PROXY;
   desired.proxy_server = L"http=" + endpoint + L";https=" + endpoint;
-  desired.proxy_bypass = L"<local>;localhost;127.*;[::1]";
+  desired.proxy_bypass =
+      L"<local>;localhost;*.localhost;*.local;127.*;10.*;169.254.*;"
+      L"172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;"
+      L"172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;"
+      L"172.30.*;172.31.*;192.168.*;[::1];[fc*];[fd*];[fe8*];[fe9*];[fea*];[feb*]";
+  for (int octet = 64; octet <= 127; ++octet) {
+    desired.proxy_bypass += L";100." + std::to_wstring(octet) + L".*";
+  }
   desired.auto_config_url.clear();
   return Apply(desired, error);
 }

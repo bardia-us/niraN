@@ -1,28 +1,32 @@
 import 'package:flutter/material.dart';
 
 import 'glass_surface.dart';
+import 'animated_popup_surface.dart';
+import 'snapshot_glass_route.dart';
+import 'live_liquid_glass.dart';
 
 Future<T?> showNirangDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool barrierDismissible = true,
-}) => showGeneralDialog<T>(
+}) => showSnapshotGlassRoute<T>(
   context: context,
+  useLiveBackdrop: liveGlassReady,
   barrierDismissible: barrierDismissible,
-  barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-  barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: .035),
-  transitionDuration: const Duration(milliseconds: 140),
+  captureRegion: Rect.fromCenter(
+    center: MediaQuery.sizeOf(context).center(Offset.zero),
+    width: 656,
+    height: MediaQuery.sizeOf(context).height * .78 + 96,
+  ),
+  transitionDuration: MediaQuery.disableAnimationsOf(context)
+      ? Duration.zero
+      : const Duration(milliseconds: 140),
   pageBuilder: (routeContext, _, _) => builder(routeContext),
   // A BackdropFilter inside FadeTransition is rendered through an opacity
   // save-layer, which can expose the unfiltered backdrop on Windows. Keep the
   // glass fully painted from frame one and animate geometry only.
-  transitionBuilder: (_, animation, _, child) => ScaleTransition(
-    scale: Tween<double>(
-      begin: .96,
-      end: 1,
-    ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
-    child: child,
-  ),
+  transitionBuilder: (_, animation, _, child) =>
+      AnimatedPopupSurface(animation: animation, child: child),
 );
 
 class NirangAlertDialog extends StatelessWidget {
@@ -52,8 +56,9 @@ class NirangAlertDialog extends StatelessWidget {
       insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
       child: GlassSurface(
         radius: 22,
-        blur: 22,
-        saturation: 1.32,
+        blur: liveGlassReady ? messagesLiquidBlur : 16,
+        saturation: liveGlassReady ? messagesLiquidSaturation : 1.20,
+        liveLiquid: true,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 560, maxHeight: maxHeight),
           child: Column(

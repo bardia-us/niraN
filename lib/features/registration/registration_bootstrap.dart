@@ -4,6 +4,7 @@ import '../../core/registration/device_registration.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/platform/nirang_native.dart';
 import '../../core/update_checker.dart';
+import '../../core/widgets/brand_mark.dart';
 import '../../core/windows_update_manager.dart';
 import '../../platform/windows/windows_device_registration.dart';
 import '../../platform/windows/windows_native_host.dart';
@@ -13,11 +14,13 @@ class NiranRegistrationBootstrap extends StatefulWidget {
   NiranRegistrationBootstrap({
     required this.child,
     DeviceRegistrationCoordinator? coordinator,
+    this.graphicsReady,
     super.key,
   }) : coordinator = coordinator ?? windowsRemoteAccess;
 
   final Widget child;
   final DeviceRegistrationCoordinator coordinator;
+  final Future<void>? graphicsReady;
 
   @override
   State<NiranRegistrationBootstrap> createState() =>
@@ -41,9 +44,7 @@ class _NiranRegistrationBootstrapState
     future: _initialization,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return _consentApp(
-          const Scaffold(body: Center(child: CircularProgressIndicator())),
-        );
+        return _consentApp(const _StartupLoadingScreen());
       }
       final error = snapshot.error;
       if (_isBlocked(error)) markDeviceAccessBlocked(_errorMessage(error));
@@ -111,6 +112,7 @@ class _NiranRegistrationBootstrapState
           // mandatory-update lock. Cached allowed access remains usable.
         }
       }
+      await widget.graphicsReady;
       clearDeviceAccessBlocked();
     }
     return accepted;
@@ -127,6 +129,7 @@ class _NiranRegistrationBootstrapState
     final coordinator = widget.coordinator;
     if (coordinator is! RemoteAccessController) return _verifyAccess();
     await (coordinator as RemoteAccessController).requireAllowed();
+    await widget.graphicsReady;
     clearDeviceAccessBlocked();
     return true;
   }
@@ -160,9 +163,7 @@ class _NiranRegistrationBootstrapState
           return;
         }
         setState(() {
-          _error = error is DeviceAccessException
-              ? error.message
-              : 'Device registration failed. Check your connection and try again.';
+          _error = error is DeviceAccessException ? error.message : 'Device registration failed. Check your connection and try again.';
         });
       }
     } finally {
@@ -190,6 +191,34 @@ class _NiranRegistrationBootstrapState
   static String _errorMessage(Object? error) => error is DeviceAccessException
       ? error.message
       : 'Access status could not be verified. Check your connection and try again.';
+}
+
+class _StartupLoadingScreen extends StatelessWidget {
+  const _StartupLoadingScreen();
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: DecoratedBox(
+      decoration: NirangVisualEffects.shellBackground(
+        Theme.of(context),
+        reducedEffects: false,
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const BrandMark(),
+            const SizedBox(height: 14),
+            Text('niraN', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(minHeight: 3),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class MandatoryWindowsUpdateScreen extends StatefulWidget {
@@ -238,8 +267,7 @@ class _MandatoryWindowsUpdateScreenState
     } on Object {
       if (!mounted) return;
       setState(() {
-        _error =
-            'Could not load the verified Windows update. Check your internet connection or use the browser download.';
+        _error = 'Could not load the verified Windows update. Check your internet connection or use the browser download.';
         _loading = false;
       });
     }

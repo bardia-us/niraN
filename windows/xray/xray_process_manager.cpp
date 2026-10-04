@@ -58,8 +58,9 @@ bool XrayProcessManager::Start(const std::wstring& executable,
                                const std::wstring& config_path,
                                std::wstring* error,
                                const std::wstring& process_label) {
+  std::scoped_lock lifecycle_lock(lifecycle_mutex_);
   std::wstring stop_error;
-  if (!Stop(&stop_error)) {
+  if (!StopLocked(&stop_error)) {
     if (error != nullptr) {
       *error = L"Unable to stop the previous niraN " + process_label +
                L" process: " +
@@ -172,7 +173,7 @@ bool XrayProcessManager::Start(const std::wstring& executable,
   if (WaitForSingleObject(process_info.hProcess, 300) == WAIT_OBJECT_0) {
     const DWORD early_exit = ExitCode();
     std::wstring ignored;
-    Stop(&ignored);
+    StopLocked(&ignored);
     if (error != nullptr) {
       const int32_t normalized_exit = static_cast<int32_t>(early_exit);
       *error = process_label + L" exited during startup";
@@ -190,6 +191,11 @@ bool XrayProcessManager::Start(const std::wstring& executable,
 }
 
 bool XrayProcessManager::Stop(std::wstring* error) {
+  std::scoped_lock lifecycle_lock(lifecycle_mutex_);
+  return StopLocked(error);
+}
+
+bool XrayProcessManager::StopLocked(std::wstring* error) {
   HANDLE process = nullptr;
   HANDLE job = nullptr;
   HANDLE output_read = nullptr;

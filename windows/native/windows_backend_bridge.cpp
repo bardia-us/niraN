@@ -8,6 +8,7 @@
 #include <flutter/standard_method_codec.h>
 #include <shellapi.h>
 #include <windows.h>
+#include <mmsystem.h>
 #include <wincrypt.h>
 #include <security.h>
 #include <winrt/Windows.Security.Cryptography.h>
@@ -23,9 +24,58 @@
 #include <utility>
 
 #include "private_config.h"
+#include "windows/runner/window_size_limits.h"
 
 namespace niran {
 namespace {
+
+bool IsFeedbackWave(const std::vector<uint8_t>& bytes) {
+  // Both bundled cues are short PCM recordings. The Codex stereo recording
+  // is 109686 bytes, so the old 64 KiB limit silently excluded it.
+  if (bytes.size() < 44 || bytes.size() > 1024 * 1024 ||
+      !std::equal(bytes.begin(), bytes.begin() + 4, "RIFF") ||
+      !std::equal(bytes.begin() + 8, bytes.begin() + 12, "WAVE")) {
+    return false;
+  }
+  const auto read16 = [&](size_t offset) -> uint16_t {
+    return static_cast<uint16_t>(bytes[offset]) |
+           (static_cast<uint16_t>(bytes[offset + 1]) << 8);
+  };
+  const auto read32 = [&](size_t offset) -> uint32_t {
+    return static_cast<uint32_t>(read16(offset)) |
+           (static_cast<uint32_t>(read16(offset + 2)) << 16);
+  };
+  if (read32(4) != bytes.size() - 8) return false;
+  bool format_valid = false;
+  uint16_t block_align = 0;
+  uint32_t data_size = 0;
+  size_t offset = 12;
+  while (offset + 8 <= bytes.size()) {
+    const uint32_t size = read32(offset + 4);
+    const size_t content = offset + 8;
+    if (size > bytes.size() - content) return false;
+    if (std::equal(bytes.begin() + offset, bytes.begin() + offset + 4,
+                   "fmt ")) {
+      if (size < 16) return false;
+      const uint16_t channels = read16(content + 2);
+      const uint32_t rate = read32(content + 4);
+      block_align = read16(content + 12);
+      format_valid = read16(content) == WAVE_FORMAT_PCM &&
+                     (channels == 1 || channels == 2) &&
+                     rate > 0 && rate <= 192000 &&
+                     read16(content + 14) == 16 &&
+                     block_align == channels * 2 &&
+                     read32(content + 8) == rate * block_align;
+      if (!format_valid) return false;
+    } else if (std::equal(bytes.begin() + offset,
+                          bytes.begin() + offset + 4, "data")) {
+      data_size = size;
+    }
+    offset = content + size + (size & 1);
+  }
+  return offset == bytes.size() && format_valid && data_size > 0 &&
+         data_size % block_align == 0;
+}
 
 struct AsyncCompletion {
   std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result;
@@ -431,6 +481,7 @@ WindowsBackendBridge::~WindowsBackendBridge() {
 void WindowsBackendBridge::Shutdown() {
   std::scoped_lock lock(shutdown_mutex_);
   if (shutdown_) return;
+  PlaySoundW(nullptr, nullptr, 0);
   for (auto& worker : workers_) {
     if (worker.joinable()) worker.join();
   }
@@ -441,6 +492,7 @@ void WindowsBackendBridge::Shutdown() {
   singbox_tun_.Stop(&ignored);
   tun_running_.store(false);
   xray_.Stop(&ignored);
+  singbox_proxy_.Stop(&ignored);
   shutdown_ = true;
 }
 
@@ -481,7 +533,7 @@ void WindowsBackendBridge::RequestTrayAction(const std::string& action) {
       "trayAction", std::make_unique<flutter::EncodableValue>(action));
 }
 
-bool WindowsBackendBridge::IsCoreRunning() { return xray_.IsRunning(); }
+bool WindowsBackendBridge::IsCoreRunning() { return xray_.IsRunning() || singbox_proxy_.IsRunning(); }
 
 bool WindowsBackendBridge::IsTunRunning() const { return tun_running_.load(); }
 
@@ -496,6 +548,44 @@ void WindowsBackendBridge::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const std::string& method = call.method_name();
+  if (method == "showDesktopFeedback") {
+    bool shown = false;
+    bool played = false;
+    if (BoolArgument(call, "notification")) {
+      NOTIFYICONDATAW notice{};
+      notice.cbSize = sizeof(notice);
+      notice.hWnd = window_;
+      notice.uID = 1;
+      notice.uFlags = NIF_INFO | NIF_REALTIME;
+      notice.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME;
+      wcscpy_s(notice.szInfoTitle, L"niraN");
+      const auto message = Wide(StringArgument(call, "message"));
+      wcsncpy_s(notice.szInfo, message.c_str(), _TRUNCATE);
+      shown = Shell_NotifyIconW(NIM_MODIFY, &notice) != FALSE;
+    }
+    if (const auto* args = std::get_if<flutter::EncodableMap>(call.arguments())) {
+      const auto entry = args->find(flutter::EncodableValue("sound"));
+      if (entry != args->end()) {
+        const auto* bytes = std::get_if<std::vector<uint8_t>>(&entry->second);
+        if (bytes == nullptr || !IsFeedbackWave(*bytes)) {
+          result->Error("invalid_audio", "Feedback must be a valid short PCM WAV");
+          return;
+        }
+        // Stop before replacing the buffer: async playback retains its memory
+        // until it finishes or the next cue explicitly stops it.
+        PlaySoundW(nullptr, nullptr, 0);
+        feedback_wave_ = *bytes;
+        played = PlaySoundW(reinterpret_cast<LPCWSTR>(feedback_wave_.data()),
+                            nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT) != FALSE;
+        if (!played) {
+          result->Error("audio_unavailable", "Windows could not start feedback playback");
+          return;
+        }
+      }
+    }
+    result->Success(flutter::EncodableValue(shown || played));
+    return;
+  }
   if (method == "getBuildConfig") {
     flutter::EncodableMap values;
     values[flutter::EncodableValue("telegramUrl")] =
@@ -550,6 +640,30 @@ void WindowsBackendBridge::HandleMethodCall(
     } else {
       result->Success(flutter::EncodableValue(plain));
     }
+    return;
+  }
+  if (method == "resetWindowBounds") {
+    const HMONITOR monitor = MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info = {sizeof(info)};
+    if (!GetMonitorInfoW(monitor, &info)) {
+      result->Error("window_bounds", "Window work area unavailable");
+      return;
+    }
+    const auto limits = GetWindowSizeLimits(window_, monitor);
+    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(window_));
+    const auto bounds = CalculateWindowBounds(
+        info.rcWork.left + (limits.max_width - MulDiv(1180, dpi, 96)) / 2,
+        info.rcWork.top + (limits.max_height - MulDiv(760, dpi, 96)) / 2,
+        MulDiv(1180, dpi, 96), MulDiv(760, dpi, 96),
+        info.rcWork.left, info.rcWork.top, limits);
+    if (IsZoomed(window_)) ShowWindow(window_, SW_RESTORE);
+    if (!SetWindowPos(window_, nullptr, bounds.x, bounds.y, bounds.width, bounds.height,
+                      SWP_NOZORDER | SWP_NOACTIVATE)) {
+      result->Error("window_bounds", "Window could not be restored");
+      return;
+    }
+    SendMessageW(window_, WM_EXITSIZEMOVE, 0, 0);
+    result->Success();
     return;
   }
   if (method == "exitApplication") {
@@ -627,6 +741,41 @@ void WindowsBackendBridge::HandleMethodCall(
                         });
     return;
   }
+  // Proxy-only sing-box. No TUN inbound, route setup or elevation here.
+  // The existing startTunFrontend handler and its admin check stay unchanged.
+  if (method == "startSingBox") {
+    const std::wstring config = Wide(StringArgument(call, "configPath"));
+    const std::wstring executable = ExecutableDirectory() + L"\\sing-box\\sing-box.exe";
+    if (config.empty()) {
+      result->Error("invalid_config", "Generated sing-box proxy config path is invalid");
+      return;
+    }
+    RunProcessOperation(std::move(result), "singbox_start",
+      [this, executable, config](std::wstring* error) {
+        return singbox_proxy_.Start(executable, config, error, L"sing-box");
+      });
+    return;
+  }
+  if (method == "stopSingBox") {
+    RunProcessOperation(std::move(result), "singbox_stop", [this](std::wstring* error) {
+      return singbox_proxy_.Stop(error);
+    });
+    return;
+  }
+  if (method == "getSingBoxStatus") {
+    const bool running = singbox_proxy_.IsRunning();
+    flutter::EncodableMap status;
+    status[flutter::EncodableValue("running")] = flutter::EncodableValue(running);
+    status[flutter::EncodableValue("exitCode")] = running ? flutter::EncodableValue() : flutter::EncodableValue(static_cast<int64_t>(static_cast<int32_t>(singbox_proxy_.ExitCode())));
+    result->Success(flutter::EncodableValue(status));
+    return;
+  }
+  if (method == "drainSingBoxLogs") {
+    flutter::EncodableList lines;
+    for (std::string& line : singbox_proxy_.DrainLogs()) lines.emplace_back(std::move(line));
+    result->Success(flutter::EncodableValue(lines));
+    return;
+  }
   if (method == "startTunFrontend") {
     const std::wstring config = Wide(StringArgument(call, "configPath"));
     const std::wstring executable =
@@ -680,17 +829,18 @@ void WindowsBackendBridge::HandleMethodCall(
     result->Success(flutter::EncodableValue(lines));
     return;
   }
-  if (method == "startSpeedtestXray") {
+  if (method == "startSpeedtestXray" || method == "startSpeedtestSingBox") {
     const std::wstring config = Wide(StringArgument(call, "configPath"));
-    const std::wstring executable = ExecutableDirectory() + L"\\xray\\xray.exe";
+    const bool singbox = method == "startSpeedtestSingBox";
+    const std::wstring executable = ExecutableDirectory() + (singbox ? L"\\sing-box\\sing-box.exe" : L"\\xray\\xray.exe");
     if (config.empty()) {
       result->Error("invalid_config", "Speed-test config path is invalid");
       return;
     }
     RunProcessOperation(
         std::move(result), "xray_speedtest_start",
-        [this, executable, config](std::wstring* error) {
-          return speedtest_xray_.Start(executable, config, error);
+        [this, executable, config, singbox](std::wstring* error) {
+          return speedtest_xray_.Start(executable, config, error, singbox ? L"sing-box" : L"Xray");
         });
     return;
   }

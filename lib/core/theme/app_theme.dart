@@ -40,15 +40,43 @@ extension NirangThemeContext on BuildContext {
 }
 
 abstract final class AppTheme {
+  static const accentColors = <String, Color>{
+    'purple': AppPalette.primary,
+    'blue': Color(0xFF1976D2),
+    'teal': Color(0xFF008B8B),
+    'green': Color(0xFF328449),
+    'orange': Color(0xFFB96B17),
+    'rose': Color(0xFFB94F84),
+  };
+  static final _personalized = <String, ThemeData>{};
+  static ThemeData personalized(
+    Brightness brightness, {
+    required bool reducedEffects,
+    required String accent,
+    required String darkStyle,
+  }) => _personalized.putIfAbsent(
+    '${brightness.name}:$reducedEffects:$accent:$darkStyle',
+    () => _theme(
+      brightness,
+      reducedEffects,
+      accent: accent,
+      darkStyle: darkStyle,
+    ),
+  );
   static final ThemeData light = _theme(Brightness.light, false);
   static final ThemeData dark = _theme(Brightness.dark, false);
   static final ThemeData lightPerformance = _theme(Brightness.light, true);
   static final ThemeData darkPerformance = _theme(Brightness.dark, true);
 
-  static ThemeData _theme(Brightness brightness, bool reducedEffects) {
+  static ThemeData _theme(
+    Brightness brightness,
+    bool reducedEffects, {
+    String accent = 'purple',
+    String darkStyle = 'graphite',
+  }) {
     final isDark = brightness == Brightness.dark;
     final scheme = ColorScheme.fromSeed(
-      seedColor: AppPalette.primary,
+      seedColor: accentColors[accent] ?? AppPalette.primary,
       brightness: brightness,
       dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
     );
@@ -57,7 +85,11 @@ abstract final class AppTheme {
       brightness: brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: isDark
-          ? AppPalette.darkCanvas
+          ? switch (darkStyle) {
+              'graphite' => const Color(0xFF18191C),
+              'oled' => Colors.black,
+              _ => AppPalette.darkCanvas,
+            }
           : AppPalette.lightCanvas,
       extensions: [
         NirangSemanticColors(
@@ -65,7 +97,7 @@ abstract final class AppTheme {
           warning: isDark ? AppPalette.darkWarning : AppPalette.lightWarning,
         ),
       ],
-      visualDensity: VisualDensity.compact,
+      visualDensity: VisualDensity.standard,
       pageTransitionsTheme: PageTransitionsTheme(
         builders: {
           TargetPlatform.android: reducedEffects
@@ -95,7 +127,7 @@ abstract final class AppTheme {
         elevation: 0,
         color: scheme.surfaceContainerLow.withValues(alpha: isDark ? .76 : .82),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(22),
           side: BorderSide(color: scheme.outlineVariant.withValues(alpha: .45)),
         ),
       ),
@@ -107,39 +139,91 @@ abstract final class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         height: 66,
         indicatorShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      navigationRailTheme: NavigationRailThemeData(
+        indicatorColor: scheme.primary.withValues(alpha: isDark ? .24 : .13),
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        selectedIconTheme: IconThemeData(color: scheme.primary, size: 25),
+        unselectedIconTheme: IconThemeData(
+          color: scheme.onSurfaceVariant,
+          size: 23,
+        ),
+        selectedLabelTextStyle: TextStyle(
+          color: scheme.primary,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+        unselectedLabelTextStyle: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w500,
+          fontSize: 12,
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size(0, 42),
+          minimumSize: const Size(0, 44),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(11),
+            borderRadius: BorderRadius.circular(22),
           ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(0, 44),
+          shape: const StadiumBorder(),
+          side: BorderSide(color: scheme.outline.withValues(alpha: .4)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: const StadiumBorder(),
+          minimumSize: const Size(0, 40),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(
+          shape: const CircleBorder(),
+          minimumSize: const Size(40, 40),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(alpha: .45),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(11),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: .5),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: .5),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: scheme.primary, width: 1.5),
         ),
       ),
       dialogTheme: DialogThemeData(
         elevation: 2,
-        barrierColor: scheme.scrim.withValues(alpha: .035),
+        barrierColor: Colors.transparent,
         backgroundColor: scheme.surfaceContainerHigh.withValues(
           alpha: isDark ? .91 : .93,
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
       bottomSheetTheme: BottomSheetThemeData(
         elevation: 2,
         modalBackgroundColor: scheme.surfaceContainer.withValues(
           alpha: isDark ? .94 : .96,
         ),
-        modalBarrierColor: scheme.scrim.withValues(alpha: .045),
+        modalBarrierColor: Colors.transparent,
         showDragHandle: true,
         clipBehavior: Clip.antiAlias,
         shape: const RoundedRectangleBorder(
@@ -165,8 +249,11 @@ abstract final class NirangVisualEffects {
           center: const Alignment(.72, -.82),
           radius: 1.45,
           colors: [
-            scheme.primary.withValues(alpha: .14),
-            scheme.secondary.withValues(alpha: .055),
+            Color.alphaBlend(scheme.primary.withValues(alpha: .12), background),
+            Color.alphaBlend(
+              scheme.secondary.withValues(alpha: .05),
+              background,
+            ),
             background,
           ],
           stops: const [0, .38, 1],

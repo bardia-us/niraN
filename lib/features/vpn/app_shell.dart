@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/diagnostics.dart';
+import '../../core/desktop_feedback.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/theme/app_theme.dart';
@@ -13,7 +14,12 @@ import '../../core/update_checker.dart';
 import '../../core/windows_release_state.dart';
 import '../../core/windows_update_manager.dart';
 import '../../core/widgets/glass_dialog.dart';
+import '../../core/widgets/interactive_depth.dart';
+import '../../core/widgets/brand_mark.dart';
+import '../../core/widgets/glass_surface.dart';
+import '../../core/widgets/snapshot_glass.dart';
 import '../../core/widgets/operation_error.dart';
+import '../../core/widgets/niran_toast.dart';
 import '../../core/widgets/release_notes_markdown.dart';
 import '../logs/logs_screen.dart';
 import '../servers/servers_screen.dart';
@@ -28,12 +34,14 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pageMotion;
+  final GlobalKey _glassBoundaryKey = GlobalKey();
   static Future<ReleaseCheckResult?>? _startupUpdateOperation;
   int _index = 0;
   bool _reminderQueued = false;
   bool _successfulPingSinceConnect = false;
-  bool _performancePromptQueued = false;
   bool _startupUpdateQueued = false;
   bool _whatsNewQueued = false;
   late UpdateDownloadStatus _lastUpdateStatus;
@@ -42,6 +50,12 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
+    unawaited(warmSnapshotGlass());
+    _pageMotion = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+      value: 1,
+    );
     NirangDiagnostics.currentFeature = 'home';
     _lastUpdateStatus = WindowsUpdateManager.instance.snapshot.status;
     WindowsUpdateManager.instance.addListener(_handleUpdateDownload);
@@ -49,6 +63,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   void dispose() {
+    _pageMotion.dispose();
     WindowsUpdateManager.instance.removeListener(_handleUpdateDownload);
     super.dispose();
   }
@@ -117,14 +132,26 @@ class _AppShellState extends ConsumerState<AppShell> {
           ready: value.asData != null,
           loading: value.isLoading,
           error: value.hasError ? value.error : null,
-          performanceMode:
-              value.asData?.value.settings.performanceMode ?? false,
+          sidebarRight: value.asData?.value.settings.sidebarRight ?? false,
         ),
       ),
     );
     ref.listen(appControllerProvider, (previous, next) {
       next.whenData((app) {
         final previousApp = previous?.asData?.value;
+        if (previousApp?.isRefreshing == true &&
+            !app.isRefreshing &&
+            app.subscriptionError == null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              showNiranToast(
+                context,
+                context.s('subscriptionUpdated'),
+                icon: Icons.sync_rounded,
+              );
+            }
+          });
+        }
         if (!app.connection.isConnected) {
           _successfulPingSinceConnect = false;
         } else {
@@ -141,16 +168,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           });
           if (freshSuccess) _successfulPingSinceConnect = true;
         }
-        if (!_performancePromptQueued &&
-            !app.settings.performanceModePrompted) {
-          _performancePromptQueued = true;
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _showPerformanceModePrompt(),
-          );
-          return;
-        }
         if (!_reminderQueued &&
-            app.settings.performanceModePrompted &&
             app.telegramEligible &&
             app.connection.isConnected &&
             _successfulPingSinceConnect &&
@@ -208,12 +226,13 @@ class _AppShellState extends ConsumerState<AppShell> {
     const pages = [
       HomeScreen(),
       ServersScreen(),
-      SettingsScreen(),
+      SettingsScreen(topInset: kToolbarHeight),
       LogsScreen(),
     ];
     final theme = Theme.of(context);
-    final reducedEffects = shellState.performanceMode;
+    const reducedEffects = false;
     void selectDestination(int value) {
+      if (_index == value) return;
       NirangDiagnostics.currentFeature = const [
         'home',
         'servers',
@@ -221,6 +240,31 @@ class _AppShellState extends ConsumerState<AppShell> {
         'logs',
       ][value];
       setState(() => _index = value);
+      unawaited(
+        DesktopFeedback.show(
+          style:
+              ref
+                  .read(appControllerProvider)
+                  .asData
+                  ?.value
+                  .settings
+                  .soundStyle ??
+              'notification',
+          sound:
+              ref
+                  .read(appControllerProvider)
+                  .asData
+                  ?.value
+                  .settings
+                  .soundEffects ??
+              true,
+        ),
+      );
+      if (reducedEffects || MediaQuery.disableAnimationsOf(context)) {
+        _pageMotion.value = 1;
+      } else {
+        _pageMotion.forward(from: 0);
+      }
       if (value == 3) {
         ref.read(appControllerProvider.notifier).refreshLogs();
       }
@@ -264,150 +308,179 @@ class _AppShellState extends ConsumerState<AppShell> {
         (value) => value.asData?.value.connection ?? const ConnectionInfo(),
       ),
     );
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyR, control: true): () {
-          if (connection.isConnected && !connection.isBusy) {
-            unawaited(controller.restartService());
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.f5): () {
-          unawaited(controller.refreshSubscription());
-        },
-      },
-      child: Focus(
-        autofocus: true,
-        child: DecoratedBox(
-          decoration: NirangVisualEffects.shellBackground(
-            theme,
-            reducedEffects: reducedEffects,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final desktopLayout = constraints.maxWidth >= 900;
-              final body = IndexedStack(index: _index, children: pages);
-              return Scaffold(
-                backgroundColor: Colors.transparent,
-                appBar: AppBar(
-                  backgroundColor: NirangVisualEffects.chromeColor(
-                    theme,
-                    reducedEffects: reducedEffects,
-                    darkAlpha: .58,
-                  ),
-                  flexibleSpace: reducedEffects
-                      ? null
-                      : ClipRect(
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(
-                              sigmaX: NirangVisualEffects.chromeBlur(theme, 12),
-                              sigmaY: NirangVisualEffects.chromeBlur(theme, 12),
+    return GlassSnapshotSource(
+      boundaryKey: _glassBoundaryKey,
+      child: GlassSnapshotBoundary(
+        key: _glassBoundaryKey,
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.keyR, control: true): () {
+              if (connection.isConnected && !connection.isBusy) {
+                unawaited(controller.restartService());
+              }
+            },
+            const SingleActivator(LogicalKeyboardKey.f5): () {
+              unawaited(controller.refreshSubscription());
+            },
+          },
+          child: Focus(
+            autofocus: true,
+            child: DecoratedBox(
+              decoration: NirangVisualEffects.shellBackground(
+                theme,
+                reducedEffects: reducedEffects,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final desktopLayout = constraints.maxWidth >= 900;
+                  final body = AnimatedBuilder(
+                    animation: _pageMotion,
+                    child: IndexedStack(
+                      index: _index,
+                      children: [
+                        for (var i = 0; i < pages.length; i++)
+                          TickerMode(
+                            enabled: _index == i,
+                            child: RepaintBoundary(child: pages[i]),
+                          ),
+                      ],
+                    ),
+                    builder: (context, child) => Transform.translate(
+                      offset: Offset(
+                        0,
+                        (1 - Curves.easeOutCubic.transform(_pageMotion.value)) *
+                            10,
+                      ),
+                      child: child,
+                    ),
+                  );
+                  return Scaffold(
+                    extendBodyBehindAppBar: _index == 2,
+                    backgroundColor: Colors.transparent,
+                    appBar: AppBar(
+                      backgroundColor: Colors.transparent,
+                      surfaceTintColor: Colors.transparent,
+                      elevation: 0,
+                      scrolledUnderElevation: 0,
+                      flexibleSpace: ClipRect(
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(
+                            sigmaX: NirangVisualEffects.chromeBlur(theme, 12),
+                            sigmaY: NirangVisualEffects.chromeBlur(theme, 12),
+                          ),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surface.withValues(
+                                alpha: theme.brightness == Brightness.dark
+                                    ? .10
+                                    : .32,
+                              ),
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: theme.colorScheme.outline.withValues(
+                                    alpha: .12,
+                                  ),
+                                ),
+                              ),
                             ),
                             child: const SizedBox.expand(),
                           ),
                         ),
-                  title: Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: Image.asset(
-                          'assets/branding/nirang-mark.png',
-                          filterQuality: FilterQuality.high,
-                          width: 30,
-                          height: 30,
-                          semanticLabel: 'niraN',
-                        ),
                       ),
-                      const SizedBox(width: 10),
-                      const Text('niraN'),
-                    ],
-                  ),
-                ),
-                body: desktopLayout
-                    ? Row(
+                      title: Row(
                         children: [
-                          NavigationRail(
-                            selectedIndex: _index,
-                            onDestinationSelected: selectDestination,
-                            labelType: NavigationRailLabelType.all,
-                            groupAlignment: -.65,
-                            backgroundColor: NirangVisualEffects.chromeColor(
-                              theme,
-                              reducedEffects: reducedEffects,
-                              darkAlpha: .56,
-                            ),
-                            destinations: [
-                              for (final destination in destinations)
-                                NavigationRailDestination(
-                                  icon: destination.icon,
-                                  selectedIcon: destination.selectedIcon,
-                                  label: Text(destination.label),
-                                ),
-                            ],
-                          ),
-                          VerticalDivider(
-                            width: 1,
-                            color: theme.colorScheme.outlineVariant,
-                          ),
-                          Expanded(
-                            child: Center(
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 1240,
-                                ),
-                                child: body,
-                              ),
-                            ),
-                          ),
+                          const BrandMark(),
+                          const SizedBox(width: 10),
+                          const Text('niraN'),
                         ],
-                      )
-                    : body,
-                bottomNavigationBar: desktopLayout
-                    ? null
-                    : reducedEffects
-                    ? navigationBar
-                    : ClipRect(
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(
-                            sigmaX: NirangVisualEffects.chromeBlur(theme, 14),
-                            sigmaY: NirangVisualEffects.chromeBlur(theme, 14),
-                          ),
-                          child: navigationBar,
-                        ),
                       ),
-              );
-            },
+                    ),
+                    body: desktopLayout
+                        ? Row(
+                            textDirection: shellState.sidebarRight
+                                ? TextDirection.rtl
+                                : TextDirection.ltr,
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  12,
+                                  _index == 2 ? kToolbarHeight + 8 : 8,
+                                  8,
+                                  16,
+                                ),
+                                child: GlassSurface(
+                                  radius: 24,
+                                  blur: 18,
+                                  child: NavigationRail(
+                                    minWidth: 94,
+                                    selectedIndex: _index,
+                                    onDestinationSelected: selectDestination,
+                                    labelType: NavigationRailLabelType.all,
+                                    groupAlignment: -.80,
+                                    backgroundColor: Colors.transparent,
+                                    destinations: [
+                                      for (final destination in destinations)
+                                        NavigationRailDestination(
+                                          icon: InteractiveDepth(
+                                            reducedEffects: reducedEffects,
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(3),
+                                              child: destination.icon,
+                                            ),
+                                          ),
+                                          selectedIcon: InteractiveDepth(
+                                            reducedEffects: reducedEffects,
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(3),
+                                              child:
+                                                  destination.selectedIcon ??
+                                                  destination.icon,
+                                            ),
+                                          ),
+                                          label: Text(destination.label),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 1240,
+                                    ),
+                                    child: body,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : body,
+                    bottomNavigationBar: desktopLayout
+                        ? null
+                        : ClipRect(
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(
+                                sigmaX: NirangVisualEffects.chromeBlur(
+                                  theme,
+                                  14,
+                                ),
+                                sigmaY: NirangVisualEffects.chromeBlur(
+                                  theme,
+                                  14,
+                                ),
+                              ),
+                              child: navigationBar,
+                            ),
+                          ),
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),
     );
-  }
-
-  Future<void> _showPerformanceModePrompt() async {
-    if (!mounted) return;
-    final enable = await showNirangDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => NirangAlertDialog(
-        icon: const Icon(Icons.bolt_rounded),
-        title: Text(context.s('performanceMode')),
-        content: Text(context.s('performanceModeDialogBody')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text(context.s('keepFullEffects')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(context.s('enable')),
-          ),
-        ],
-      ),
-    );
-    if (!mounted || enable == null) return;
-    await ref.read(appControllerProvider.notifier).updateSettings({
-      'performanceMode': enable,
-      'performanceModePrompted': true,
-    });
   }
 
   Future<void> _checkStartupUpdate(

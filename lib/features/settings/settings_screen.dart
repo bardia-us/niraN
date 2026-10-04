@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
+import '../../core/desktop_feedback.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/widgets/glass_dialog.dart';
+import '../../core/widgets/settings_group.dart';
+import '../../core/widgets/desktop_page_heading.dart';
 import '../../core/widgets/operation_error.dart';
+import '../../core/widgets/telegram_mark.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/update_checker.dart';
 import '../../core/windows_update_manager.dart';
 import '../vpn/app_controller.dart';
+import '../vpn/home_layout.dart';
+import '../../platform/windows/windows_core_selection.dart';
 
 const _xrayResolutionStrategies = <String, String>{
   'AsIs': 'AsIs',
@@ -20,7 +27,8 @@ const _xrayResolutionStrategies = <String, String>{
 };
 
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({this.topInset = 0, super.key});
+  final double topInset;
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
@@ -44,6 +52,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void dispose() {
     WindowsUpdateManager.instance.removeListener(_handleUpdateManagerFocus);
     _scrollController.dispose();
+    _updatesController.dispose();
     super.dispose();
   }
 
@@ -113,6 +122,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appVersion: view.appVersion,
     );
     final settings = app.settings;
+    final darkCanvasEnabled = Theme.of(context).brightness == Brightness.dark;
     final controller = ref.read(appControllerProvider.notifier);
     if (!_updateManagerInitialized && app.appVersion.isNotEmpty) {
       _updateManagerInitialized = true;
@@ -120,10 +130,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
     return ListView(
       controller: _scrollController,
-      padding: const EdgeInsets.only(bottom: 24),
+      padding: EdgeInsets.fromLTRB(20, 6 + widget.topInset, 20, 24),
       children: [
-        _SettingsGroup(
+        DesktopPageHeading(
+          title: context.s('settings'),
+          subtitle: context.s('settingsOverview'),
+        ),
+        SettingsGroup(
           title: context.s('tunSettings'),
+          icon: Icons.vpn_lock_outlined,
           initiallyExpanded: true,
           children: [
             SwitchListTile(
@@ -162,8 +177,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('localProxy'),
+          icon: Icons.router_outlined,
           children: [
             SwitchListTile(
               secondary: const Icon(Icons.sync_alt_rounded),
@@ -227,8 +243,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('delayTest'),
+          icon: Icons.speed_rounded,
           children: [
             ListTile(
               leading: const Icon(Icons.travel_explore_rounded),
@@ -282,9 +299,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('coreSettings'),
+          icon: Icons.memory_rounded,
           children: [
+            for (final protocol in WindowsCoreSelection.protocols)
+              ListTile(
+                leading: const Icon(Icons.memory_rounded),
+                title: Text(
+                  protocol == 'hysteria2'
+                      ? 'Hysteria2'
+                      : protocol.toUpperCase(),
+                ),
+                subtitle: Text(
+                  settings.coreByProtocol[protocol] == 'sing-box'
+                      ? 'sing-box'
+                      : 'Xray',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () =>
+                    _chooseCore(context, controller, settings, protocol),
+              ),
             ListTile(
               leading: const Icon(Icons.article_outlined),
               title: Text(context.s('xrayLogLevel')),
@@ -407,16 +442,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('routing'),
+          icon: Icons.route_outlined,
           children: [
             ListTile(
-              leading: const Icon(Icons.route_outlined),
-              title: Text(context.s('routing')),
-              subtitle: Text(_routingLabel(context, settings.routingMode)),
-              onTap: () => _chooseRouting(context, controller, settings),
+              leading: const Icon(Icons.lan_outlined),
+              title: Text(context.s('localBypass')),
+              subtitle: Text(context.s('localBypassHint')),
+              trailing: const Icon(Icons.check_circle_outline),
             ),
-            if (settings.routingMode == 'bypassIran')
+            SwitchListTile(
+              secondary: const Icon(Icons.route_outlined),
+              title: Text(context.s('bypassIran')),
+              subtitle: Text(context.s('bypassIranHint')),
+              value: settings.bypassIran,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'bypassIran': value}),
+              ),
+            ),
+            if (settings.bypassIran)
               ListTile(
                 leading: const Icon(Icons.home_work_outlined),
                 title: Text(context.s('domesticDns')),
@@ -430,7 +476,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       controller.updateSettings({'domesticDns': value}),
                 ),
               ),
-            if (settings.routingMode == 'custom')
+            SwitchListTile(
+              secondary: const Icon(Icons.rule_rounded),
+              title: Text(context.s('customBypass')),
+              value: settings.customRulesEnabled,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'customRulesEnabled': value}),
+              ),
+            ),
+            if (settings.customRulesEnabled)
               ListTile(
                 leading: const Icon(Icons.rule_rounded),
                 title: Text(context.s('custom')),
@@ -439,8 +494,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('dns'),
+          icon: Icons.dns_outlined,
           children: [
             ListTile(
               leading: const Icon(Icons.public_outlined),
@@ -498,8 +554,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('advancedSettings'),
+          icon: Icons.tune_rounded,
           children: [
             ListTile(
               leading: const Icon(Icons.settings_ethernet_rounded),
@@ -698,8 +755,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('subscriptionUpdate'),
+          icon: Icons.sync_rounded,
           children: [
             ListTile(
               leading: const Icon(Icons.sync_rounded),
@@ -769,9 +827,132 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('appearance'),
+          icon: Icons.palette_outlined,
           children: [
+            SwitchListTile(
+              secondary: const Icon(Icons.volume_up_outlined),
+              title: Text(context.s('soundEffects')),
+              value: settings.soundEffects,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'soundEffects': value}),
+              ),
+            ),
+            ListTile(
+              enabled: settings.soundEffects,
+              leading: const Icon(Icons.music_note_rounded),
+              title: Text(context.s('soundStyle')),
+              subtitle: Text(
+                context.s(
+                  settings.soundStyle == 'classic'
+                      ? 'classicSound'
+                      : 'notificationSound',
+                ),
+              ),
+              trailing: IconButton(
+                tooltip: context.s('previewSound'),
+                onPressed: settings.soundEffects
+                    ? () => DesktopFeedback.show(style: settings.soundStyle)
+                    : null,
+                icon: const Icon(Icons.play_circle_outline_rounded),
+              ),
+              onTap: !settings.soundEffects
+                  ? null
+                  : () => _chooseValue(
+                      context,
+                      title: context.s('soundStyle'),
+                      current: settings.soundStyle,
+                      values: {
+                        'notification': context.s('notificationSound'),
+                        'classic': context.s('classicSound'),
+                      },
+                      onSelected: (style) async {
+                        await controller.updateSettings({'soundStyle': style});
+                        await DesktopFeedback.show(
+                          sound: settings.soundEffects,
+                          style: style,
+                        );
+                      },
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    context.s('accentColor'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      for (final accent in AppTheme.accentColors.entries)
+                        Tooltip(
+                          message: context.s(accent.key),
+                          child: SizedBox.square(
+                            dimension: 38,
+                            child: IconButton.filled(
+                              style: IconButton.styleFrom(
+                                backgroundColor: accent.value,
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: () => _perform(
+                                context,
+                                () => controller.updateSettings({
+                                  'accentColor': accent.key,
+                                }),
+                              ),
+                              icon: Icon(
+                                settings.accentColor == accent.key
+                                    ? Icons.check_rounded
+                                    : Icons.circle_outlined,
+                                size: 19,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.dark_mode_outlined),
+              enabled: darkCanvasEnabled,
+              title: Text(context.s('darkStyle')),
+              subtitle: Text(
+                darkCanvasEnabled
+                    ? context.s(settings.darkStyle)
+                    : context.s('darkStyleLightHint'),
+              ),
+              onTap: darkCanvasEnabled
+                  ? () => _chooseValue(
+                      context,
+                      title: context.s('darkStyle'),
+                      current: settings.darkStyle,
+                      values: {
+                        for (final style in ['midnight', 'graphite', 'oled'])
+                          style: context.s(style),
+                      },
+                      onSelected: (value) =>
+                          controller.updateSettings({'darkStyle': value}),
+                    )
+                  : null,
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.view_sidebar_outlined),
+              title: Text(context.s('sidebarRight')),
+              value: settings.sidebarRight,
+              onChanged: (value) => _perform(
+                context,
+                () => controller.updateSettings({'sidebarRight': value}),
+              ),
+            ),
             ListTile(
               leading: const Icon(Icons.contrast_rounded),
               title: Text(context.s('theme')),
@@ -810,28 +991,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
             SwitchListTile(
-              secondary: const Icon(Icons.bolt_rounded),
-              title: Text(context.s('performanceMode')),
-              subtitle: Text(context.s('performanceModeSummary')),
-              value: settings.performanceMode,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({
-                  'performanceMode': value,
-                  'performanceModePrompted': true,
-                }),
-              ),
-            ),
-            SwitchListTile(
               secondary: const Icon(Icons.notes_rounded),
               title: Text(context.s('showRecentLogsOnHome')),
               subtitle: Text(context.s('showRecentLogsOnHomeSummary')),
               value: settings.showRecentLogsOnHome,
-              onChanged: (value) => _perform(
-                context,
-                () =>
-                    controller.updateSettings({'showRecentLogsOnHome': value}),
-              ),
+              onChanged: (value) => _perform(context, () async {
+                final layout = HomeLayout.fromSettings(settings);
+                final restored = value ? layout.restoreLogs() : layout;
+                if (restored == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(context.s('homeNoRoomForLogs'))),
+                  );
+                  return;
+                }
+                await controller.updateSettings({
+                  'showRecentLogsOnHome': value,
+                  'homeLayout': restored.encode(),
+                });
+              }),
             ),
             SwitchListTile(
               secondary: const Icon(Icons.login_rounded),
@@ -845,8 +1022,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('updates'),
+          icon: Icons.system_update_alt_rounded,
           controller: _updatesController,
           children: [
             ListTile(
@@ -871,8 +1049,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
-        _SettingsGroup(
+        SettingsGroup(
           title: context.s('settings'),
+          icon: Icons.info_outline_rounded,
           children: [
             ListTile(
               leading: const Icon(Icons.public_rounded),
@@ -893,7 +1072,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             ListTile(
               enabled: settings.telegramUrlConfigured,
-              leading: const Icon(Icons.send_outlined),
+              leading: const TelegramMark(),
               title: Text(context.s('telegram')),
               subtitle: Text(
                 settings.telegramContact.isEmpty
@@ -965,32 +1144,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (accepted != true || !context.mounted) return;
     await _perform(context, controller.resetSettings);
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(context.s('settingsReset'))));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.s('settingsReset'))));
     }
   }
 
-  Future<void> _chooseRouting(
+  Future<void> _chooseCore(
     BuildContext context,
     AppController controller,
     NativeSettings settings,
+    String protocol,
   ) async {
     await _chooseValue(
       context,
-      title: context.s('routing'),
-      current: settings.routingMode,
-      values: {
-        'global': context.s('global'),
-        'bypassIran': context.s('bypassIran'),
-        'custom': context.s('custom'),
-      },
+      title: '${context.s('proxyCore')} · ${protocol.toUpperCase()}',
+      current: settings.coreByProtocol[protocol] ?? 'xray',
+      values: {'xray': 'Xray', 'sing-box': 'sing-box'},
       descriptions: {
-        'global': context.s('globalRoutingHint'),
-        'bypassIran': context.s('bypassIranHint'),
-        'custom': context.s('customRuleHint'),
+        'xray': context.s('xrayCoreHint'),
+        'sing-box': context.s('singBoxCoreHint'),
       },
-      onSelected: (value) => controller.updateSettings({'routingMode': value}),
+      onSelected: (value) => controller.updateSettings({
+        'coreByProtocol': {protocol: value},
+      }),
     );
   }
 
@@ -1006,9 +1182,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final release = await const GitHubUpdateChecker().check(currentVersion);
       if (!context.mounted) return;
       if (!release.updateAvailable) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(context.s('upToDate'))));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(context.s('upToDate'))));
         return;
       }
       final updateManager = WindowsUpdateManager.instance;
@@ -1524,59 +1699,6 @@ class _CustomRulesDialogState extends State<_CustomRulesDialog> {
   );
 }
 
-class _SettingsGroup extends StatelessWidget {
-  const _SettingsGroup({
-    required this.title,
-    required this.children,
-    this.controller,
-    this.initiallyExpanded = false,
-  });
-
-  final String title;
-  final List<Widget> children;
-  final ExpansibleController? controller;
-  final bool initiallyExpanded;
-
-  @override
-  Widget build(BuildContext context) => ExpansionTile(
-    key: PageStorageKey(title),
-    controller: controller,
-    initiallyExpanded: initiallyExpanded,
-    maintainState: true,
-    tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-    childrenPadding: const EdgeInsets.only(bottom: 6),
-    shape: Border(
-      bottom: BorderSide(
-        color: Theme.of(
-          context,
-        ).colorScheme.outlineVariant.withValues(alpha: .45),
-      ),
-    ),
-    collapsedShape: Border(
-      bottom: BorderSide(
-        color: Theme.of(
-          context,
-        ).colorScheme.outlineVariant.withValues(alpha: .30),
-      ),
-    ),
-    title: Text(
-      title.toUpperCase(),
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        letterSpacing: .8,
-        color: Theme.of(context).colorScheme.primary,
-        fontWeight: FontWeight.w700,
-      ),
-    ),
-    children: children,
-  );
-}
-
-String _routingLabel(BuildContext context, String value) => switch (value) {
-  'bypassIran' => context.s('bypassIran'),
-  'custom' => context.s('custom'),
-  _ => context.s('global'),
-};
-
 List<String> _splitRules(String value) => value
     .split(RegExp(r'[,\n]'))
     .map((entry) => entry.trim())
@@ -1608,9 +1730,8 @@ bool _validFragmentRange(
   bool allowSingle = false,
 }) {
   final value = raw?.trim() ?? '';
-  final match = RegExp(
-    allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$',
-  ).firstMatch(value);
+  final match = RegExp(allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$')
+      .firstMatch(value);
   if (match == null) return false;
   final from = int.tryParse(match.group(1) ?? '');
   final to = int.tryParse(match.group(2) ?? match.group(1) ?? '');

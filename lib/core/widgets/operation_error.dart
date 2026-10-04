@@ -85,6 +85,14 @@ String friendlyErrorMessage(BuildContext context, Object error) {
   }
   if (error is PlatformException) {
     return switch (error.code) {
+      'unsupported_core_profile' => message(
+        'This profile uses options unsupported by sing-box. Select Xray for this protocol in Settings.',
+        'این کانفیگ گزینه‌های ناسازگار با sing-box دارد. در تنظیمات، هستهٔ این پروتکل را Xray انتخاب کنید.',
+      ),
+      'singbox_start' => message(
+        'sing-box could not start. Check the profile and core settings.',
+        'sing-box شروع نشد. کانفیگ و تنظیمات هسته را بررسی کنید.',
+      ),
       'no_server' => message(
         'Please select a server first.',
         'ابتدا یک سرور انتخاب کنید.',

@@ -11,6 +11,67 @@ import 'package:niran/core/windows_update_manager.dart';
 import 'package:niran/core/widgets/operation_error.dart';
 
 void main() {
+  test('exact hotfix build wins over legacy asset in either order', () {
+    final assets = [
+      for (final name in [
+        'niraN-v0.3.8-windows-x64-setup.exe',
+        'niraN-v0.3.8+13-windows-x64-setup.exe',
+      ])
+        {
+          'name': name,
+          'browser_download_url':
+              'https://github.com/bardia-us/niraN/releases/download/v0.3.8/$name',
+          'size': 100,
+        },
+    ];
+    for (final order in [assets, assets.reversed.toList()]) {
+      final release = parseGitHubRelease({
+        'tag_name': 'v0.3.8',
+        'html_url': 'https://github.com/bardia-us/niraN/releases/tag/v0.3.8',
+        'assets': order,
+      }, '0.3.8+12');
+      expect(release.setupAsset?.version?.build, 13);
+    }
+  });
+  test(
+    'replacement release build is offered without changing display version',
+    () {
+      final release = parseGitHubRelease({
+        'tag_name': 'v0.3.8',
+        'html_url': 'https://github.com/bardia-us/niraN/releases/tag/v0.3.8',
+        'body': '<!-- niran-build: 13 -->\n## English\nFixes',
+        'assets': [
+          {
+            'name': 'niraN-v0.3.8-windows-x64-setup.exe',
+            'browser_download_url':
+                'https://github.com/bardia-us/niraN/releases/download/v0.3.8/niraN-v0.3.8-windows-x64-setup.exe',
+            'size': 100,
+          },
+        ],
+      }, '0.3.8+12');
+      expect(release.updateAvailable, isTrue);
+      expect(release.latestVersion.toString(), '0.3.8+13');
+      expect(release.setupAsset, isNotNull);
+    },
+  );
+  test('build-qualified asset works and an older build is not offered', () {
+    final payload = <String, dynamic>{
+      'tag_name': 'v0.3.8',
+      'html_url': 'https://github.com/bardia-us/niraN/releases/tag/v0.3.8',
+      'assets': [
+        {
+          'name': 'niraN-v0.3.8+13-windows-x64-setup.exe',
+          'browser_download_url':
+              'https://github.com/bardia-us/niraN/releases/download/v0.3.8/niraN-v0.3.8+13-windows-x64-setup.exe',
+          'size': 100,
+        },
+      ],
+    };
+    final release = parseGitHubRelease(payload, '0.3.8+12');
+    expect(release.updateAvailable, isTrue);
+    expect(release.setupAsset?.version.toString(), '0.3.8+13');
+    expect(parseGitHubRelease(payload, '0.3.8+14').updateAvailable, isFalse);
+  });
   test('TUN privilege failures are recognized for friendly UI', () {
     expect(
       isTunPrivilegeError(

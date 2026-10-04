@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'windows_server_record.dart';
+import 'windows_routing_policy.dart';
 
 final class WindowsXrayConfigBuilder {
   const WindowsXrayConfigBuilder();
@@ -67,9 +68,30 @@ final class WindowsXrayConfigBuilder {
     required WindowsServerRecord server,
     required Map<String, Object?> settings,
     List<String> iranCidrs = const [],
+    int? trafficMetricsPort,
   }) {
     _validateServer(server);
+    if (trafficMetricsPort != null &&
+        (trafficMetricsPort < 1024 ||
+            trafficMetricsPort > 65535 ||
+            trafficMetricsPort == settings['localSocksPort'] ||
+            trafficMetricsPort == settings['localHttpPort'])) {
+      throw const FormatException('Traffic metrics port is invalid');
+    }
     final config = <String, Object?>{
+      if (trafficMetricsPort != null) ...{
+        'metrics': {
+          'tag': 'niran-metrics',
+          'listen': '127.0.0.1:$trafficMetricsPort',
+        },
+        'stats': <String, Object?>{},
+        'policy': {
+          'system': {
+            'statsOutboundUplink': true,
+            'statsOutboundDownlink': true,
+          },
+        },
+      },
       'log': {'loglevel': '${settings['xrayLogLevel'] ?? 'warning'}'},
       'dns': _dns(settings),
       'inbounds': _inbounds(settings),
@@ -562,7 +584,7 @@ final class WindowsXrayConfigBuilder {
         'skipFallback': true,
       });
     }
-    if (settings['routingMode'] == 'bypassIran' && domestic.isNotEmpty) {
+    if (WindowsRoutingPolicy.bypassIran(settings) && domestic.isNotEmpty) {
       servers.insert(0, {
         'address': domestic.first,
         'domains': ['domain:ir', 'domain:local'],
@@ -572,6 +594,12 @@ final class WindowsXrayConfigBuilder {
         _bool(settings, 'enableFakeDns', false)) {
       servers.insert(0, 'fakedns');
     }
+    servers.insert(0, {
+      'address': 'localhost',
+      'domains': WindowsRoutingPolicy.localDomains,
+      'skipFallback': true,
+      'finalQuery': true,
+    });
     final configuredStrategy = '${settings['dnsQueryStrategy'] ?? 'Auto'}';
     final queryStrategy = configuredStrategy == 'Auto'
         ? (_bool(settings, 'enableIpv6', true) ? 'UseIP' : 'UseIPv4')
@@ -631,7 +659,11 @@ final class WindowsXrayConfigBuilder {
       'domain:localhost',
       'domain:local',
     ];
-    if (mode == 'bypassIran') {
+    rules.insertAll(0, [
+      {'type': 'field', 'domain': privateDomains, 'outboundTag': 'direct'},
+      {'type': 'field', 'ip': privateIps, 'outboundTag': 'direct'},
+    ]);
+    if (WindowsRoutingPolicy.bypassIran(settings)) {
       if (iranCidrs.isEmpty) {
         throw const FormatException('Iran CIDR assets are unavailable');
       }
@@ -647,7 +679,8 @@ final class WindowsXrayConfigBuilder {
           'outboundTag': 'direct',
         },
       ]);
-    } else if (mode == 'custom') {
+    }
+    if (WindowsRoutingPolicy.customEnabled(settings)) {
       rules.addAll([
         {'type': 'field', 'domain': privateDomains, 'outboundTag': 'direct'},
         {'type': 'field', 'ip': privateIps, 'outboundTag': 'direct'},
@@ -666,7 +699,7 @@ final class WindowsXrayConfigBuilder {
       }
     }
     if (blockQuic) {
-      rules.insert(0, {
+      rules.add({
         'type': 'field',
         'network': 'udp',
         'port': '443',

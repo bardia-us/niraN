@@ -37,12 +37,22 @@ final RegExp _unicodeCountryFlag = RegExp(
 );
 
 String? countryCodeFromRemark(String remark) {
-  final match = _unicodeCountryFlag.firstMatch(remark);
-  if (match == null) return null;
-  final runes = match.group(0)!.runes.toList(growable: false);
-  if (runes.length != 2) return null;
-  return String.fromCharCodes(runes.map((value) => value - 127397));
+  final codes = countryCodesFromRemark(remark);
+  return codes.isEmpty ? null : codes.first;
 }
+
+/// Country badges follow their order in the remark, not a prefix-only rule.
+/// Repeated flags are one identity; no country metadata is inferred or changed.
+List<String> countryCodesFromRemark(String remark) => [
+  ..._unicodeCountryFlag
+      .allMatches(remark)
+      .map(
+        (match) => String.fromCharCodes(
+          match.group(0)!.runes.map((value) => value - 127397),
+        ),
+      )
+      .toSet(),
+];
 
 String remarkWithoutCountryFlag(String remark) => remark
     .replaceAll(_unicodeCountryFlag, '')

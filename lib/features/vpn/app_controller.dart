@@ -6,20 +6,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/platform/nirang_native.dart';
 import '../../core/registration/device_registration.dart';
+import '../../core/desktop_feedback.dart';
 
 final appControllerProvider = AsyncNotifierProvider<AppController, AppSnapshot>(
   AppController.new,
 );
 
-final performanceModeProvider = Provider<bool>(
-  (ref) => ref.watch(
-    appControllerProvider.select(
-      (value) => value.asData?.value.settings.performanceMode ?? false,
-    ),
-  ),
-);
+// Retained provider identity for existing widgets; legacy Windows performance
+// preferences no longer disable the design system. OS reduced motion is separate.
+final performanceModeProvider = Provider<bool>((ref) => false);
 
 class AppController extends AsyncNotifier<AppSnapshot> {
+  AppController({
+    Future<List<dynamic>> Function(String id)? selectServerOperation,
+  }) : _selectServerOperation =
+           selectServerOperation ?? NirangNative.selectServer;
+
+  final Future<List<dynamic>> Function(String id) _selectServerOperation;
   StreamSubscription<Map<dynamic, dynamic>>? _events;
   Future<void>? _logsRefresh;
   Future<void>? _subscriptionRefresh;
@@ -59,6 +62,12 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   }
 
   Future<void> checkAccessPolicy() => NirangNative.checkAccessPolicy();
+
+  Future<void> refreshPublicIp() => _runExclusiveAction(
+    'publicIp',
+    NirangNative.refreshPublicIp,
+    cooldown: const Duration(seconds: 5),
+  );
 
   Future<void> _refreshSubscriptionOnce() async {
     _set(
@@ -106,7 +115,16 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       ),
     );
     try {
-      final servers = await NirangNative.selectServer(id);
+      // Acknowledge the selected row while Core switching continues separately.
+      if (previous.any((server) => server.id == id && !server.selected)) {
+        unawaited(
+          DesktopFeedback.show(
+            sound: _current?.settings.soundEffects ?? true,
+            style: _current?.settings.soundStyle ?? 'notification',
+          ),
+        );
+      }
+      final servers = await _selectServerOperation(id);
       _set((value) => value.copyWith(servers: _servers(servers)));
     } catch (_) {
       _set((value) => value.copyWith(servers: previous));
@@ -378,6 +396,10 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     'autoUpdate': true,
     'updateIntervalHours': 12,
     'themeMode': 'system',
+    'accentColor': 'purple',
+    'darkStyle': 'midnight',
+    'sidebarRight': false,
+    'soundEffects': true,
     'language': 'en',
     'performanceMode': false,
     'performanceModePrompted': false,
@@ -463,6 +485,10 @@ class AppController extends AsyncNotifier<AppSnapshot> {
           (value) =>
               value.copyWith(settings: NativeSettings.fromMap(_map(data))),
         );
+      case 'trafficUpdated':
+        _set(
+          (value) => value.copyWith(traffic: TrafficUsage.fromMap(_map(data))),
+        );
       case 'logEntry':
         try {
           final entry = LogEntry.fromMap(_map(data));
@@ -499,11 +525,12 @@ class AppController extends AsyncNotifier<AppSnapshot> {
     servers: _servers(map['servers']),
     connection: ConnectionInfo.fromMap(_map(map['connection'])),
     usage: SubscriptionUsage.fromMap(_map(map['usage'])),
+    traffic: TrafficUsage.fromMap(_map(map['traffic'])),
     settings: NativeSettings.fromMap(_map(map['settings'])),
     logs: _logs(map['logs'] as List<dynamic>? ?? const []),
     lastUpdated: _number(map['lastUpdated']),
     coreVersion: '${map['coreVersion'] ?? 'Unavailable'}',
-    appVersion: '${map['appVersion'] ?? '0.3.7'}',
+    appVersion: '${map['appVersion'] ?? '0.3.8+12'}',
     subscriptionConfigured: map['subscriptionConfigured'] == true,
     telegramEligible: map['telegramEligible'] == true,
     subscriptionError: map['subscriptionError']?.toString(),

@@ -6,16 +6,21 @@ import 'dart:math';
 import 'package:flutter/services.dart';
 
 import '../../core/platform/platform_backend.dart';
+import '../../core/desktop_feedback.dart';
 import '../../core/registration/device_registration.dart';
+import '../../features/vpn/home_layout.dart';
 import 'windows_native_host.dart';
 import 'windows_auto_start.dart';
 import 'windows_real_delay.dart';
 import 'windows_remote_access.dart';
 import 'windows_server_record.dart';
-import 'windows_server_order_policy.dart';
 import 'windows_sing_box_tun_config_builder.dart';
 import 'windows_subscription_parser.dart';
 import 'windows_xray_config_builder.dart';
+import 'windows_core_selection.dart';
+import 'windows_sing_box_proxy_config_builder.dart';
+import 'windows_routing_policy.dart';
+import 'windows_traffic.dart';
 
 final class WindowsPlatformBackend implements NiranPlatformBackend {
   WindowsPlatformBackend({
@@ -30,6 +35,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     AutoStartController? autoStartController,
     bool autoStartCore = true,
     bool? useSingBoxTunFrontend,
+    TrafficCounterQuery? trafficCounterQuery,
   }) : _host = host ?? MethodChannelWindowsNativeHost(),
        _dataDirectory = dataDirectory ?? _defaultDataDirectory(),
        _proxyReadinessProbe = proxyReadinessProbe,
@@ -43,13 +49,21 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
        _autoStartCore = autoStartCore,
        _singBoxTunFrontendEnabled =
            useSingBoxTunFrontend ?? _defaultSingBoxTunFrontendEnabled {
+    _trafficLedger = WindowsTrafficLedger(
+      file: File('${_dataDirectory.path}\\traffic-ledger.json'),
+    );
+    _trafficMonitor = WindowsTrafficMonitor(
+      ledger: _trafficLedger,
+      onChanged: _emitTraffic,
+    );
+    _injectedTrafficQuery = trafficCounterQuery;
     final nativeHost = _host;
     if (nativeHost is MethodChannelWindowsNativeHost) {
       _traySubscription = nativeHost.trayActions.listen(_handleTrayAction);
     }
   }
 
-  static const _appVersionFallback = '0.3.7';
+  static const _appVersionFallback = '0.3.8+12';
   static const _maxSubscriptionBytes = 4 * 1024 * 1024;
   static const _publicIpTimeout = Duration(seconds: 12);
   static const _connectTimeout = Duration(seconds: 8);
@@ -75,8 +89,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   final _events = StreamController<Map<dynamic, dynamic>>.broadcast(sync: true);
   final _parser = const WindowsSubscriptionParser();
   final _configBuilder = const WindowsXrayConfigBuilder();
+  final _singBoxConfigBuilder = const WindowsSingBoxProxyConfigBuilder();
+  WindowsProxyCore _activeCore = WindowsProxyCore.xray;
+  bool _singBoxProxyMayExist = false;
   final _tunConfigBuilder = const WindowsSingBoxTunConfigBuilder();
-  final _orderPolicy = const WindowsServerOrderPolicy();
 
   List<WindowsServerRecord> _servers = [];
   WindowsSubscriptionUsage _usage = const WindowsSubscriptionUsage();
@@ -92,6 +108,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   int _lastUpdated = 0;
   int _openCount = 0;
   int _pingGeneration = 0;
+  Completer<void> _pingCancellation = Completer<void>();
+  int _nextPingGeneration() {
+    if (!_pingCancellation.isCompleted) _pingCancellation.complete();
+    _pingCancellation = Completer<void>();
+    return ++_pingGeneration;
+  }
+
   Future<void>? _activePingOperation;
   String _coreVersion = 'Unavailable';
   String? _coreVersionMismatch;
@@ -113,6 +136,28 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void>? _startupCompletion;
   Future<void>? _coreCheck;
   HttpClient? _publicIpClient;
+  final Stopwatch _manualIpClock = Stopwatch()..start();
+  int? _lastManualIpMs;
+  late final WindowsTrafficLedger _trafficLedger;
+  late final WindowsTrafficMonitor _trafficMonitor;
+  late final TrafficCounterQuery? _injectedTrafficQuery;
+  HttpClient? _trafficClient;
+  Timer? _trafficMidnightTimer;
+  int? _trafficMetricsPort;
+  Future<void> _subscriptionCacheWrites = Future<void>.value();
+  final Map<String, Future<void>> _jsonWrites = {};
+  Future<void> _serverMutations = Future<void>.value();
+
+  Future<T> _withServerMutation<T>(Future<T> Function() operation) {
+    final request = _serverMutations.then((_) => operation());
+    // Failed operations remain visible to their callers, without poisoning
+    // subsequent server mutations. Network fetches stay outside this queue.
+    _serverMutations = request.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {},
+    );
+    return request;
+  }
 
   @override
   Stream<Map<dynamic, dynamic>> get events => _events.stream;
@@ -150,6 +195,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     await Future.wait([
       _loadState(),
       _loadSubscriptionCache(),
+      _trafficLedger.load(),
       (() async {
         if (await _xrayConfigFile.exists()) await _xrayConfigFile.delete();
         if (await _tunConfigFile.exists()) await _tunConfigFile.delete();
@@ -175,6 +221,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     await _persistState();
     _initialized = true;
     _scheduleSubscriptionUpdates();
+    _scheduleTrafficMidnight();
     _startupCompletion ??= _completeStartup();
     return _bootstrap();
   }
@@ -245,19 +292,53 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
           'Subscription contains no supported servers',
         );
       }
-      final previousServers = _servers;
-      final previouslySelected = _server(_selectedId ?? '');
-      final refreshed = result.records
-          .map(_applyProfileOverride)
-          .toList(growable: false);
-      _servers = _orderPolicy.reconcile(
-        preferredIds: _manualOrderIds,
-        previous: previousServers,
-        refreshed: refreshed,
+      return await _withServerMutation(
+        () => _commitSubscription(remote, result, emit: emit),
       );
-      if (_manualOrderIds.isNotEmpty) {
-        _manualOrderIds = _servers.map((server) => server.id).toList();
-      }
+    } on Object catch (error) {
+      await _enforceAccessGate(error);
+      _subscriptionError = _subscriptionUserError(error);
+      _log('warning', 'Subscription update failed');
+      if (emit) _emit('subscriptionError', _subscriptionError);
+      rethrow;
+    }
+  }
+
+  Future<Map<dynamic, dynamic>> _commitSubscription(
+    RemoteSubscription remote,
+    WindowsSubscriptionParseResult result, {
+    required bool emit,
+  }) async {
+    final previouslySelected = _server(_selectedId ?? '');
+    final refreshed = result.records
+        .map(_applyProfileOverride)
+        .toList(growable: false);
+    // Capture only after the awaited fetch/parse. A failed network request
+    // must not undo a reorder or selection made while it was pending.
+    final before = (
+      servers: _servers,
+      order: _manualOrderIds,
+      selected: _selectedId,
+      usage: _usage,
+      updated: _lastUpdated,
+      hidden: Set<String>.of(_hiddenIds),
+    );
+    void rollback() {
+      _servers = before.servers;
+      _manualOrderIds = before.order;
+      _selectedId = before.selected;
+      _usage = before.usage;
+      _lastUpdated = before.updated;
+      _hiddenIds
+        ..clear()
+        ..addAll(before.hidden);
+    }
+
+    try {
+      // An explicit successful refresh restores authoritative source order.
+      // Keep saved/manual order on restart and on a failed refresh only.
+      _servers = refreshed;
+      _manualOrderIds = [];
       if (previouslySelected != null &&
           !_servers.any((server) => server.id == _selectedId)) {
         final matches = _servers.where(
@@ -291,21 +372,24 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       };
       if (emit) _emit('subscription', data);
       return data;
-    } on Object catch (error) {
-      await _enforceAccessGate(error);
-      _subscriptionError = _subscriptionUserError(error);
-      _log('warning', 'Subscription update failed');
-      if (emit) _emit('subscriptionError', _subscriptionError);
+    } on Object {
+      // Do not expose source-order replacement when local persistence failed.
+      // Publication/events happen only after both writes completed.
+      rollback();
       rethrow;
     }
   }
 
   @override
-  Future<List<dynamic>> selectServer(String id) async {
+  Future<List<dynamic>> selectServer(String id) =>
+      _withServerMutation(() => _selectServer(id));
+
+  Future<List<dynamic>> _selectServer(String id) async {
     final server = _server(id);
     if (server == null) throw _platformError('not_found', 'Server not found');
     final switching = _connection['state'] == 'connected' && _selectedId != id;
     _selectedId = id;
+    _emitTraffic();
     final optimistic = _safeServers();
     _emit('servers', optimistic);
     _log('info', switching ? 'Server switch requested' : 'Server selected');
@@ -322,7 +406,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<List<dynamic>> reorderServers(List<String> ids) async {
+  Future<List<dynamic>> reorderServers(List<String> ids) =>
+      _withServerMutation(() => _reorderServers(ids));
+
+  Future<List<dynamic>> _reorderServers(List<String> ids) async {
     final visible = _visibleServers;
     final visibleIds = visible.map((server) => server.id).toSet();
     if (ids.length != visible.length ||
@@ -342,6 +429,11 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   @override
   Future<List<dynamic>> updateServerProfile(
+    String id,
+    Map<String, String> values,
+  ) => _withServerMutation(() => _updateServerProfile(id, values));
+
+  Future<List<dynamic>> _updateServerProfile(
     String id,
     Map<String, String> values,
   ) async {
@@ -391,7 +483,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<Map<dynamic, dynamic>> deleteServer(String id) async {
+  Future<Map<dynamic, dynamic>> deleteServer(String id) =>
+      _withServerMutation(() => _deleteServer(id));
+
+  Future<Map<dynamic, dynamic>> _deleteServer(String id) async {
     if (_server(id) == null) {
       throw _platformError('not_found', 'Server not found');
     }
@@ -412,7 +507,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<Map<dynamic, dynamic>> restoreDeletedServers() async {
+  Future<Map<dynamic, dynamic>> restoreDeletedServers() =>
+      _withServerMutation(_restoreDeletedServers);
+
+  Future<Map<dynamic, dynamic>> _restoreDeletedServers() async {
     final restored = _deletedCount;
     _hiddenIds.clear();
     _ensureSelection();
@@ -428,7 +526,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<void> connect(String? id) async {
+  Future<void> connect(String? id) => _withServerMutation(() => _connect(id));
+
+  Future<void> _connect(String? id) async {
     if (_transitioning || _connection['state'] == 'connected') {
       throw _platformError(
         'busy',
@@ -453,6 +553,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     try {
       _setConnection('connecting', server);
       await _startCorePipeline(server, timing);
+      await _startTraffic(server);
       _setConnection('connected', server);
       _log('info', 'Connection timing: ready ${timing.elapsedMilliseconds}ms');
       _log(
@@ -480,18 +581,49 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     }
   }
 
-  bool get _usesSingBoxTun => _tunEnabled && _singBoxTunFrontendEnabled;
+  // Choosing a proxy Core alone must never activate TUN.
+  bool get _usesSingBoxTun =>
+      _tunEnabled &&
+      (_singBoxTunFrontendEnabled || _activeCore == WindowsProxyCore.singBox);
 
   Future<void> _startCorePipeline(
     WindowsServerRecord server,
     Stopwatch timing,
   ) async {
-    await _ensureCoreCompatibility();
-    if (_coreVersionMismatch case final mismatch?) {
-      throw _platformError('core_version_mismatch', mismatch);
+    _activeCore = WindowsCoreSelection.forProtocol(_settings, server.protocol);
+    if (_activeCore == WindowsProxyCore.singBox) {
+      final reason = WindowsCoreSelection.singBoxUnsupportedReason(
+        server,
+        _settings,
+      );
+      if (reason != null) {
+        throw _platformError('unsupported_core_profile', reason);
+      }
+      if (!_singBoxTunFrontendEnabled) {
+        // Version query only; no TUN prerequisites or startup here.
+        _singBoxVersion = await _host.getSingBoxVersion();
+        final expected = '${_buildConfig['expectedSingBoxVersion'] ?? ''}'
+            .trim();
+        if (expected.isNotEmpty &&
+            _normalizedVersion(expected) !=
+                _normalizedVersion(_singBoxVersion)) {
+          throw _platformError(
+            'core_version_mismatch',
+            'Bundled sing-box version mismatch',
+          );
+        }
+      }
     }
-    if (_singBoxVersionMismatch case final mismatch?) {
-      throw _platformError('core_version_mismatch', mismatch);
+    await _ensureCoreCompatibility();
+    if (_activeCore == WindowsProxyCore.xray) {
+      if (_coreVersionMismatch case final mismatch?) {
+        throw _platformError('core_version_mismatch', mismatch);
+      }
+    }
+    if (_usesSingBoxTun || _activeCore == WindowsProxyCore.singBox) {
+      if (_singBoxVersionMismatch case final mismatch?) {
+        throw _platformError('core_version_mismatch', mismatch);
+      }
     }
     if (_tunEnabled) {
       if (_usesSingBoxTun) {
@@ -509,6 +641,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             ..._settings,
             'tunEnabled': false,
             'routingMode': 'global',
+            'bypassIran': false,
+            'customRulesEnabled': false,
             // sing-box exclusively owns TUN DNS interception and routing.
             // Keeping Xray's port-53 dns-out rule here creates a DNS loop when
             // sing-box sends its bootstrap query through the local SOCKS port.
@@ -517,11 +651,21 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
             'directDnsEnabled': false,
           }
         : _settings;
-    final config = _configBuilder.build(
-      server: server,
-      settings: xraySettings,
-      iranCidrs: cidrs,
-    );
+    _trafficMetricsPort = _activeCore == WindowsProxyCore.xray
+        ? (await _reserveTestPorts(1)).single
+        : null;
+    final config = _activeCore == WindowsProxyCore.singBox
+        ? _singBoxConfigBuilder.build(
+            server: server,
+            settings: xraySettings,
+            iranCidrs: cidrs,
+          )
+        : _configBuilder.build(
+            server: server,
+            settings: xraySettings,
+            iranCidrs: cidrs,
+            trafficMetricsPort: _trafficMetricsPort,
+          );
     await _xrayConfigFile.parent.create(recursive: true);
     await _xrayConfigFile.writeAsString(config, flush: true);
     if (_usesSingBoxTun) {
@@ -536,15 +680,23 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _tunConfigFile.writeAsString(tunConfig, flush: true);
     }
 
-    _log('info', 'Connection timing: Xray startup requested');
-    await _host.startXray(
-      _xrayConfigFile.path,
-      tunMode: _tunEnabled && !_usesSingBoxTun,
-    );
+    final coreLabel = _activeCore == WindowsProxyCore.singBox
+        ? 'sing-box'
+        : 'Xray';
+    _log('info', 'Connection timing: $coreLabel startup requested');
+    if (_activeCore == WindowsProxyCore.singBox) {
+      _singBoxProxyMayExist = true;
+      await _host.startSingBox(_xrayConfigFile.path);
+    } else {
+      await _host.startXray(
+        _xrayConfigFile.path,
+        tunMode: _tunEnabled && !_usesSingBoxTun,
+      );
+    }
     _expectXray = true;
     _log(
       'info',
-      'Connection timing: Xray started ${timing.elapsedMilliseconds}ms',
+      'Connection timing: $coreLabel started ${timing.elapsedMilliseconds}ms',
     );
     final proxyWait = Stopwatch()..start();
     if (_usesSingBoxTun) {
@@ -603,9 +755,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _coreVersionMismatch =
           'Bundled Xray Core $_coreVersion does not match expected $expected';
       _log('error', _coreVersionMismatch!);
-      return;
+    } else {
+      _coreVersionMismatch = null;
     }
-    _coreVersionMismatch = null;
     if (_singBoxTunFrontendEnabled) {
       _singBoxVersion = await _host.getSingBoxVersion();
       final expectedSingBox = '${_buildConfig['expectedSingBoxVersion'] ?? ''}'
@@ -646,7 +798,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     _monitor?.cancel();
     _publicIpClient?.close(force: true);
     _publicIpClient = null;
-    _pingGeneration++;
+    _nextPingGeneration();
     _resetTestingPings();
     try {
       await _stopCorePipeline();
@@ -672,6 +824,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     await _persistState();
     _emit('settings', _settings);
     _log('info', 'Windows System Proxy was cleared');
+    await _modeFeedback('System Proxy', false);
   }
 
   @override
@@ -685,6 +838,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     await _persistState();
     _emit('settings', _settings);
     _log('info', 'Windows System Proxy was set to niraN');
+    await _modeFeedback('System Proxy', true);
   }
 
   @override
@@ -709,11 +863,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _expectXray = false;
       _expectTunFrontend = false;
       _monitor?.cancel();
-      _pingGeneration++;
+      _nextPingGeneration();
       _resetTestingPings();
       await _stopCorePipeline(preserveSystemProxyPreference: true);
       final timing = Stopwatch()..start();
       await _startCorePipeline(server, timing);
+      await _startTraffic(server);
       _setConnection('connected', server);
       _startMonitor();
       _log(
@@ -736,6 +891,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   void _warnUnsupportedProfileFeatures(WindowsServerRecord server) {
+    if (_activeCore != WindowsProxyCore.xray) return;
     if (_queryEnabled(server.parameters['allowInsecure']) ||
         _queryEnabled(server.parameters['insecure']) ||
         _queryEnabled(server.parameters['allow_insecure'])) {
@@ -754,7 +910,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> _pingServerOnce(String id) async {
     final server = _server(id);
     if (server == null) throw _platformError('not_found', 'Server not found');
-    final generation = ++_pingGeneration;
+    final generation = _nextPingGeneration();
     if (_tunEnabled && _connection['state'] == 'connected') {
       await _runTunSafeLatencyBatch([server], generation);
     } else {
@@ -770,18 +926,16 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     final injected = _endpointLatencyProbe;
     if (injected != null) {
       try {
-        return await injected(
-          server,
-        ).timeout(const Duration(seconds: 5), onTimeout: () => -1);
+        return await injected(server)
+            .timeout(const Duration(seconds: 5), onTimeout: () => -1);
       } on Object {
         return -1;
       }
     }
     return (() async {
       try {
-        final addresses = await InternetAddress.lookup(
-          server.address,
-        ).timeout(const Duration(seconds: 3));
+        final addresses = await InternetAddress.lookup(server.address)
+            .timeout(const Duration(seconds: 3));
         if (addresses.isEmpty) return -1;
         final watch = Stopwatch()..start();
         final socket = await Socket.connect(
@@ -802,9 +956,17 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Future<void> pingAll() => _runExclusivePing(_pingAllOnce);
 
   Future<void> _pingAllOnce() async {
-    final generation = ++_pingGeneration;
+    final generation = _nextPingGeneration();
     final candidates = _visibleServers;
-    final batchSize = _integerSetting('realPingConcurrency', 16);
+    // One bounded isolated Core owns the listeners; request workers refill
+    // independently instead of waiting for a whole group of slow probes.
+    const batchSize = 256;
+    for (final server in candidates) {
+      server
+        ..pingMs = null
+        ..pingStatus = 'testing';
+      _emitPing(server);
+    }
     if (_tunEnabled && _connection['state'] == 'connected') {
       for (
         var offset = 0;
@@ -842,34 +1004,97 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         ..pingStatus = 'testing';
       _emitPing(server);
     }
+    await _runLatencyWorkers(
+      servers.length,
+      generation,
+      (index) async {
+        final server = servers[index];
+        final activeId = _connection['serverId']?.toString();
+        final delay = server.id == activeId
+            ? await _measureRealDelay(_localHttpPort, trace: true)
+            : await tcpPingServer(server.id);
+        if (generation != _pingGeneration) return;
+        server
+          ..pingMs = delay > 0 ? delay : null
+          ..pingStatus = delay > 0 ? 'success' : 'timeout';
+        _emitPing(server);
+      },
+      onTimeout: (index) {
+        final server = servers[index];
+        if (generation != _pingGeneration) return;
+        server
+          ..pingMs = null
+          ..pingStatus = 'timeout';
+        _emitPing(server);
+      },
+    );
+  }
+
+  Future<void> _runLatencyWorkers(
+    int length,
+    int generation,
+    Future<void> Function(int index) run, {
+    void Function(int)? onTimeout,
+  }) async {
+    var next = 0;
+    final cancelled = _pingCancellation.future;
+    final concurrency = _integerSetting('realPingConcurrency', 16).clamp(1, 32);
     await Future.wait([
-      for (final server in servers)
+      for (var worker = 0; worker < min(length, concurrency); worker++)
         () async {
-          final activeId = _connection['serverId']?.toString();
-          final delay = server.id == activeId
-              ? await _measureRealDelay(_localHttpPort, trace: true)
-              : await tcpPingServer(server.id);
-          if (generation != _pingGeneration) return;
-          server
-            ..pingMs = delay > 0 ? delay : null
-            ..pingStatus = delay > 0 ? 'success' : 'timeout';
-          _emitPing(server);
-        }().timeout(
-          _realDelayOperationTimeout,
-          onTimeout: () {
-            if (generation != _pingGeneration) return;
-            server
-              ..pingMs = null
-              ..pingStatus = 'timeout';
-            _emitPing(server);
-          },
-        ),
+          while (next < length && generation == _pingGeneration) {
+            final index = next++;
+            await Future.any<void>([
+              run(index).timeout(
+                _realDelayOperationTimeout,
+                onTimeout: () => onTimeout?.call(index),
+              ),
+              cancelled,
+            ]);
+          }
+        }(),
     ]);
   }
 
   Future<void> _runRealDelayBatch(
     List<WindowsServerRecord> servers,
     int generation,
+  ) async {
+    for (final core in WindowsProxyCore.values) {
+      if (generation != _pingGeneration) return;
+      final records = servers
+          .where(
+            (s) =>
+                WindowsCoreSelection.forProtocol(_settings, s.protocol) == core,
+          )
+          .toList();
+      final compatible = <WindowsServerRecord>[];
+      for (final server in records) {
+        try {
+          if (core == WindowsProxyCore.singBox) {
+            _singBoxConfigBuilder.outbound(
+              _applyProfileOverride(server),
+              _settings,
+            );
+          }
+          compatible.add(server);
+        } on Object {
+          server
+            ..pingMs = null
+            ..pingStatus = 'failed';
+          _emitPing(server);
+        }
+      }
+      if (compatible.isNotEmpty) {
+        await _runRealDelayCoreBatch(compatible, generation, core);
+      }
+    }
+  }
+
+  Future<void> _runRealDelayCoreBatch(
+    List<WindowsServerRecord> servers,
+    int generation,
+    WindowsProxyCore core,
   ) async {
     if (servers.isEmpty) return;
     var acceptResults = true;
@@ -886,23 +1111,39 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await (() async {
         await _speedtestConfigFile.parent.create(recursive: true);
         await _speedtestConfigFile.writeAsString(
-          _configBuilder.buildSpeedtest(
-            servers: servers,
-            settings: _settings,
-            socksPorts: socksPorts,
-            httpPorts: httpPorts,
-          ),
+          (core == WindowsProxyCore.singBox
+              ? _singBoxConfigBuilder.buildSpeedtest(
+                  servers: servers.map(_applyProfileOverride).toList(),
+                  settings: _settings,
+                  socksPorts: socksPorts,
+                  httpPorts: httpPorts,
+                )
+              : _configBuilder.buildSpeedtest(
+                  servers: servers.map(_applyProfileOverride).toList(),
+                  settings: _settings,
+                  socksPorts: socksPorts,
+                  httpPorts: httpPorts,
+                )),
           flush: true,
         );
         final coreTiming = Stopwatch()..start();
-        await _host.startSpeedtestXray(_speedtestConfigFile.path);
+        if (core == WindowsProxyCore.singBox) {
+          await _host.startSpeedtestSingBox(_speedtestConfigFile.path);
+        } else {
+          await _host.startSpeedtestXray(_speedtestConfigFile.path);
+        }
+        if (generation != _pingGeneration) return;
         _log(
           'info',
           'Latency timing: test Core started ${coreTiming.elapsedMilliseconds}ms',
         );
-        await Future.wait(
-          httpPorts.map(_awaitProxyPort),
-        ).timeout(const Duration(seconds: 4));
+        await Future.any<void>([
+          Future.wait(httpPorts.map(_awaitProxyPort))
+              .timeout(const Duration(seconds: 4))
+              .then((_) {}),
+          _pingCancellation.future,
+        ]);
+        if (generation != _pingGeneration) return;
         _log(
           'info',
           'Latency timing: proxies ready ${coreTiming.elapsedMilliseconds}ms',
@@ -910,18 +1151,27 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         // Match v2rayN's Realping lifecycle: Core startup and listener readiness
         // are outside the measured request, followed by a very short warm-up.
         await Future<void>.delayed(const Duration(milliseconds: 180));
-        await Future.wait([
-          for (var index = 0; index < servers.length; index++)
-            () async {
-              final delay = await _measureRealDelay(httpPorts[index]);
-              if (!acceptResults || generation != _pingGeneration) return;
-              servers[index]
-                ..pingMs = delay > 0 ? delay : null
-                ..pingStatus = delay > 0 ? 'success' : 'timeout';
-              _emitPing(servers[index]);
-            }(),
-        ]);
       }()).timeout(_realDelayOperationTimeout);
+      if (generation != _pingGeneration) return;
+      await _runLatencyWorkers(
+        servers.length,
+        generation,
+        (index) async {
+          final delay = await _measureRealDelay(httpPorts[index]);
+          if (!acceptResults || generation != _pingGeneration) return;
+          servers[index]
+            ..pingMs = delay > 0 ? delay : null
+            ..pingStatus = delay > 0 ? 'success' : 'timeout';
+          _emitPing(servers[index]);
+        },
+        onTimeout: (index) {
+          if (!acceptResults || generation != _pingGeneration) return;
+          servers[index]
+            ..pingMs = null
+            ..pingStatus = 'timeout';
+          _emitPing(servers[index]);
+        },
+      );
     } on TimeoutException {
       acceptResults = false;
       if (generation == _pingGeneration) {
@@ -1005,14 +1255,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   @override
   Future<void> cancelPing() async {
-    _pingGeneration++;
+    _nextPingGeneration();
     unawaited(_host.stopSpeedtestXray());
     _resetTestingPings();
     _emit('pingCancelled', true);
   }
 
   Future<void> _stopSpeedtestForTunTransition() async {
-    _pingGeneration++;
+    _nextPingGeneration();
     _resetTestingPings();
     try {
       await _host.stopSpeedtestXray().timeout(const Duration(seconds: 1));
@@ -1036,7 +1286,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<void> _pingConnectedServerOnce(WindowsServerRecord server) async {
     if (_servers.any((item) => item.pingStatus == 'testing')) return;
-    final generation = ++_pingGeneration;
+    final generation = _nextPingGeneration();
     server
       ..pingMs = null
       ..pingStatus = 'testing';
@@ -1064,7 +1314,12 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       return active;
     }
     late final Future<void> request;
-    request = Future<void>.sync(operation).whenComplete(() {
+    request = Future<void>.sync(operation).whenComplete(() async {
+      try {
+        await _persistSubscriptionCache();
+      } on Object {
+        _log('warning', 'Latency results could not be saved');
+      }
       if (identical(_activePingOperation, request)) {
         _activePingOperation = null;
       }
@@ -1079,6 +1334,20 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   ) async {
     final previous = Map<String, Object?>.from(_settings);
     final updated = Map<String, Object?>.from(_settings);
+    if (values.containsKey('coreByProtocol')) {
+      try {
+        updated['coreByProtocol'] = {
+          ...(_settings['coreByProtocol'] as Map? ?? {}),
+          ...WindowsCoreSelection.validateMapping(values['coreByProtocol']),
+        };
+      } on FormatException {
+        throw _platformError('invalid_settings', 'Invalid core selection');
+      }
+    }
+    if (values.containsKey('routingMode')) {
+      updated['bypassIran'] = values['routingMode'] == 'bypassIran';
+      updated['customRulesEnabled'] = values['routingMode'] == 'custom';
+    }
     const stringKeys = {
       'routingMode',
       'customDomains',
@@ -1094,6 +1363,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'proxyTargetStrategy',
       'proxyDialStrategy',
       'themeMode',
+      'accentColor',
+      'darkStyle',
       'language',
       'ipCheckUrl',
       'realDelayUrl',
@@ -1108,8 +1379,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'defaultFingerprint',
       'defaultUserAgent',
       'muxQuicHandling',
+      'homeUsageSide',
+      'homeControlOrder',
+      'homeLayout',
+      'soundStyle',
     };
     const booleanKeys = {
+      'bypassIran',
+      'customRulesEnabled',
       'enableLocalDns',
       'enableFakeDns',
       'directDnsEnabled',
@@ -1124,6 +1401,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'preferIpv6',
       'autoUpdate',
       'performanceMode',
+      'sidebarRight',
+      'soundEffects',
       'performanceModePrompted',
       'showRecentLogsOnHome',
       'systemProxyEnabled',
@@ -1178,6 +1457,19 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       'dark',
     });
     _validateSettingChoice(updated, 'language', const {'en', 'fa'});
+    _validateSettingChoice(updated, 'accentColor', const {
+      'purple',
+      'blue',
+      'teal',
+      'green',
+      'orange',
+      'rose',
+    });
+    _validateSettingChoice(updated, 'darkStyle', const {
+      'midnight',
+      'graphite',
+      'oled',
+    });
     _validateSettingChoice(updated, 'xrayLogLevel', const {
       'debug',
       'info',
@@ -1341,6 +1633,31 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       );
     }
     final changedNetworkSetting = values.keys.any(_restartSettingKeys.contains);
+    if (!const {'left', 'right'}.contains(updated['homeUsageSide'])) {
+      throw _platformError('invalid_settings', 'Home usage side is invalid');
+    }
+    final homeOrder = '${updated['homeControlOrder']}'.split(',');
+    if (homeOrder.length != 3 ||
+        homeOrder.toSet().length != 3 ||
+        !homeOrder.every(const {'systemProxy', 'clearProxy', 'tun'}.contains)) {
+      throw _platformError('invalid_settings', 'Home control order is invalid');
+    }
+    if (values.containsKey('homeLayout') && values['homeLayout'] is! String) {
+      throw _platformError('invalid_settings', 'Home layout is invalid');
+    }
+    final homeLayout = '${updated['homeLayout'] ?? ''}';
+    if (homeLayout.isNotEmpty &&
+        HomeLayout.tryDecode(
+              homeLayout,
+              logsVisible: updated['showRecentLogsOnHome'] != false,
+            ) ==
+            null) {
+      throw _platformError('invalid_settings', 'Home layout is invalid');
+    }
+    _validateSettingChoice(updated, 'soundStyle', const {
+      'notification',
+      'classic',
+    });
     final enablingTun = values['tunEnabled'] == true && !_tunEnabled;
     if (enablingTun) {
       // Validate before changing state or stopping a healthy Core.
@@ -1380,8 +1697,33 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         rethrow;
       }
     }
+    // A disconnected toggle only saves a preference; it does not activate TUN.
+    if (_connection['state'] == 'connected' &&
+        previous['tunEnabled'] != _settings['tunEnabled']) {
+      await _modeFeedback('TUN', _settings['tunEnabled'] == true);
+    } else if (_connection['state'] == 'connected' &&
+        previous['systemProxyEnabled'] != _settings['systemProxyEnabled']) {
+      await _modeFeedback(
+        'System Proxy',
+        _settings['systemProxyEnabled'] == true,
+      );
+    }
     return _settings;
   }
+
+  Future<void> _modeFeedback(String mode, bool enabled) =>
+      _host is! MethodChannelWindowsNativeHost
+      ? Future<void>.value()
+      : DesktopFeedback.show(
+          notification: true,
+          sound: _settings['soundEffects'] != false,
+          style: _settings['soundStyle'] == 'classic'
+              ? 'classic'
+              : 'notification',
+          message: _settings['language'] == 'fa'
+              ? '$mode ${enabled ? 'فعال' : 'غیرفعال'} شد'
+              : '$mode ${enabled ? 'enabled' : 'disabled'}',
+        );
 
   @override
   Future<List<dynamic>> getLogs() async {
@@ -1426,7 +1768,13 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   @override
-  Future<void> exitApplication() => _host.exitApplication();
+  Future<void> exitApplication() async {
+    await _trafficMonitor.stop();
+    _trafficClient?.close(force: true);
+    _trafficMidnightTimer?.cancel();
+    await _persistSubscriptionCache();
+    await _host.exitApplication();
+  }
 
   @override
   Future<void> recordTelegramDecision(String decision) async {
@@ -1439,6 +1787,20 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   @override
   Future<void> recordFlutterError(String message) async {
     _log('error', 'Flutter error: ${_truncate(_sanitize(message), 1200)}');
+  }
+
+  @override
+  Future<void> refreshPublicIp() async {
+    final server = _activeServer;
+    if (_connection['state'] != 'connected' ||
+        server == null ||
+        _publicIpClient != null) {
+      return;
+    }
+    final now = _manualIpClock.elapsedMilliseconds;
+    if (_lastManualIpMs != null && now - _lastManualIpMs! < 5000) return;
+    _lastManualIpMs = now;
+    await _updatePublicIp(server);
   }
 
   Future<void> _updatePublicIp(WindowsServerRecord server) async {
@@ -1533,6 +1895,52 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     });
   }
 
+  Future<void> _startTraffic(WindowsServerRecord server) async {
+    _trafficClient?.close(force: true);
+    _trafficClient = null;
+    final port = _trafficMetricsPort;
+    TrafficCounterQuery? query = _injectedTrafficQuery;
+    if (query == null && _activeCore == WindowsProxyCore.xray && port != null) {
+      query = () async {
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(milliseconds: 900)
+          ..findProxy = (_) => 'DIRECT';
+        _trafficClient = client;
+        try {
+          return await queryXrayTraffic(client, port);
+        } finally {
+          client.close(force: true);
+          if (identical(_trafficClient, client)) _trafficClient = null;
+        }
+      };
+    }
+    try {
+      await _trafficMonitor.start(
+        server.id,
+        query: query,
+        unavailableReason: 'unsupportedCore',
+      );
+    } on Object {
+      _trafficLedger.unavailable('counterUnavailable');
+      _emitTraffic();
+    }
+  }
+
+  void _emitTraffic() => _emit(
+    'trafficUpdated',
+    _trafficLedger.snapshot(_selectedId, DateTime.now()).toMap(),
+  );
+
+  void _scheduleTrafficMidnight() {
+    _trafficMidnightTimer?.cancel();
+    final now = DateTime.now();
+    final midnight = DateTime(now.year, now.month, now.day + 1);
+    _trafficMidnightTimer = Timer(midnight.difference(now), () {
+      _emitTraffic();
+      _scheduleTrafficMidnight();
+    });
+  }
+
   Future<void> _pollXray() async {
     if (_pollingXray) return;
     _pollingXray = true;
@@ -1540,7 +1948,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _collectCoreLogs();
       await _syncSystemProxyState();
       if (!_expectXray || _transitioning) return;
-      final status = await _host.getXrayStatus();
+      final status = _activeCore == WindowsProxyCore.singBox
+          ? await _host.getSingBoxStatus()
+          : await _host.getXrayStatus();
       Map<dynamic, dynamic>? tunStatus;
       if (_expectTunFrontend) {
         tunStatus = await _host.getTunFrontendStatus();
@@ -1553,7 +1963,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       _monitor?.cancel();
       Object? cleanupFailure;
       try {
-        await _stopCorePipeline();
+        await _stopCorePipeline(sampleTraffic: false);
       } on Object catch (error) {
         cleanupFailure = error;
       }
@@ -1563,7 +1973,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       final cleanupSuffix = cleanupFailure == null
           ? ''
           : '; cleanup failed: ${_safeError(cleanupFailure)}';
-      final failedCore = !xrayRunning ? 'Xray' : 'sing-box TUN';
+      final failedCore = !xrayRunning
+          ? (_activeCore == WindowsProxyCore.singBox ? 'sing-box' : 'Xray')
+          : 'sing-box TUN';
       final failedExitCode = !xrayRunning ? exitCode : tunExitCode;
       _setConnection(
         'error',
@@ -1587,8 +1999,10 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<void> _collectCoreLogs() async {
     try {
-      final xrayLines = await _host.drainXrayLogs();
-      final tunLines = _singBoxTunFrontendEnabled
+      final xrayLines = _activeCore == WindowsProxyCore.singBox
+          ? await _host.drainSingBoxLogs()
+          : await _host.drainXrayLogs();
+      final tunLines = _usesSingBoxTun
           ? await _host.drainTunFrontendLogs()
           : const <String>[];
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -1596,7 +2010,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         _recentCoreLogs.removeWhere((_, seen) => now - seen > 60000);
       }
       for (final entry in [
-        for (final line in xrayLines) ('Xray', line),
+        for (final line in xrayLines)
+          (_activeCore == WindowsProxyCore.singBox ? 'sing-box' : 'Xray', line),
         for (final line in tunLines) ('sing-box', line),
       ]) {
         final (source, raw) = entry;
@@ -1645,13 +2060,23 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
 
   Future<void> _stopCorePipeline({
     bool preserveSystemProxyPreference = false,
+    bool sampleTraffic = true,
   }) async {
+    try {
+      await _trafficMonitor.stop(finalSample: sampleTraffic);
+    } on Object {
+      _log('warning', 'Traffic checkpoint could not be saved');
+    } finally {
+      _trafficClient?.close(force: true);
+      _trafficClient = null;
+      _trafficMetricsPort = null;
+    }
     final systemProxyWasEnabled = _systemProxyEnabled;
     final shouldStopTunFrontend = _expectTunFrontend || _tunFrontendMayExist;
     _monitor?.cancel();
     _publicIpClient?.close(force: true);
     _publicIpClient = null;
-    _pingGeneration++;
+    _nextPingGeneration();
     _resetTestingPings();
     _expectXray = false;
     _expectTunFrontend = false;
@@ -1666,7 +2091,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     } on Object catch (error) {
       failure ??= error;
     }
-    if (_singBoxTunFrontendEnabled && shouldStopTunFrontend) {
+    // A selected sing-box proxy can also need this frontend. Stop the process
+    // that actually started, independent of the legacy frontend feature flag.
+    if (shouldStopTunFrontend) {
       try {
         await _host.stopTunFrontend().timeout(const Duration(seconds: 2));
         _tunFrontendMayExist = false;
@@ -1678,6 +2105,14 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       await _host.stopXray().timeout(const Duration(seconds: 2));
     } on Object catch (error) {
       failure ??= error;
+    }
+    if (_singBoxProxyMayExist) {
+      try {
+        await _host.stopSingBox().timeout(const Duration(seconds: 2));
+        _singBoxProxyMayExist = false;
+      } on Object catch (error) {
+        failure ??= error;
+      }
     }
     await _collectCoreLogs();
     await _syncSystemProxyState();
@@ -1785,7 +2220,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   }
 
   Future<List<String>> _loadIranCidrs() async {
-    if (_settings['routingMode'] != 'bypassIran') return const [];
+    if (!WindowsRoutingPolicy.bypassIran(_settings)) return const [];
     final includeIpv6 = _settings['enableIpv6'] == true;
     final cached = _iranCidrsCache[includeIpv6];
     if (cached != null) return cached;
@@ -1829,6 +2264,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
   Map<String, Object?> _bootstrap() => {
     'servers': _safeServers(),
     'usage': _usage.toMap(),
+    'traffic': _trafficLedger.snapshot(_selectedId, DateTime.now()).toMap(),
     'lastUpdated': _lastUpdated,
     'connection': _connection,
     'settings': _settings,
@@ -1911,6 +2347,22 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
         };
       }
       _settings['connectionMode'] = 'proxy';
+      final homeLayout = _settings['homeLayout'];
+      if (homeLayout is! String ||
+          (homeLayout.isNotEmpty &&
+              HomeLayout.tryDecode(
+                    homeLayout,
+                    logsVisible: _settings['showRecentLogsOnHome'] != false,
+                  ) ==
+                  null)) {
+        _settings['homeLayout'] = '';
+      }
+      if (!const {
+        'notification',
+        'classic',
+      }.contains(_settings['soundStyle'])) {
+        _settings['soundStyle'] = 'notification';
+      }
       _openCount = (payload['openCount'] as num?)?.toInt() ?? 0;
     } on Object {
       _log('warning', 'Ignored a damaged settings cache');
@@ -1958,24 +2410,42 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'openCount': _openCount,
   });
 
-  Future<void> _persistSubscriptionCache() async {
+  Future<void> _persistSubscriptionCache() {
     final plain = jsonEncode({
       'servers': _servers.map((server) => server.toPrivateJson()).toList(),
       'usage': _usage.toJson(),
       'lastUpdated': _lastUpdated,
     });
-    final protected = await _host.protectData(plain);
-    await _writeJson(_subscriptionFile, {
-      'format': 'dpapi-v1',
-      'payload': protected,
+    final request = _subscriptionCacheWrites.catchError((Object _) {}).then((
+      _,
+    ) async {
+      final protected = await _host.protectData(plain);
+      await _writeJson(_subscriptionFile, {
+        'format': 'dpapi-v1',
+        'payload': protected,
+      });
     });
+    _subscriptionCacheWrites = request;
+    return request;
   }
 
-  Future<void> _writeJson(File target, Object value) async {
+  Future<void> _writeJson(File target, Object value) {
+    // Reorder, refresh and settings can write the same state concurrently.
+    // Capture now, then serialize each file's tmp/bak/rename lifecycle.
+    final encoded = jsonEncode(value);
+    final previous = _jsonWrites[target.path] ?? Future<void>.value();
+    final request = previous
+        .catchError((Object _) {})
+        .then((_) => _writeJsonOnce(target, encoded));
+    _jsonWrites[target.path] = request;
+    return request;
+  }
+
+  Future<void> _writeJsonOnce(File target, String encoded) async {
     await target.parent.create(recursive: true);
     final temporary = File('${target.path}.tmp');
     final backup = File('${target.path}.bak');
-    await temporary.writeAsString(jsonEncode(value), flush: true);
+    await temporary.writeAsString(encoded, flush: true);
     if (await backup.exists()) await backup.delete();
     if (await target.exists()) await target.rename(backup.path);
     try {
@@ -2302,9 +2772,8 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     required int minimum,
     bool allowSingle = false,
   }) {
-    final match = RegExp(
-      allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$',
-    ).firstMatch(value);
+    final match = RegExp(allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$')
+        .firstMatch(value);
     if (match == null) return false;
     final from = int.tryParse(match.group(1) ?? '');
     final to = int.tryParse(match.group(2) ?? match.group(1) ?? '');
@@ -2328,6 +2797,7 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'systemProxyState': 'other',
     'tunEnabled': false,
     'routingMode': 'bypassIran',
+    'coreByProtocol': <String, String>{},
     'customDomains': '',
     'customIps': '',
     'enableLocalDns': true,
@@ -2377,10 +2847,18 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
     'autoUpdate': true,
     'updateIntervalHours': 12,
     'themeMode': 'system',
+    'accentColor': 'purple',
+    'darkStyle': 'graphite',
+    'sidebarRight': false,
+    'soundEffects': true,
+    'soundStyle': 'notification',
+    'homeLayout': '',
     'language': 'en',
     'performanceMode': false,
     'performanceModePrompted': false,
     'showRecentLogsOnHome': true,
+    'homeUsageSide': 'right',
+    'homeControlOrder': 'systemProxy,clearProxy,tun',
     'startWithWindows': false,
     'ipCheckUrl': 'https://api.ip.sb/geoip',
     'telegramUrlConfigured': false,
@@ -2402,6 +2880,9 @@ final class WindowsPlatformBackend implements NiranPlatformBackend {
       const {'1', 'true', 'yes', 'on'}.contains(value?.trim().toLowerCase());
 
   static const _restartSettingKeys = {
+    'coreByProtocol',
+    'bypassIran',
+    'customRulesEnabled',
     'tunEnabled',
     'routingMode',
     'customDomains',

@@ -1,4 +1,5 @@
 #include "flutter_window.h"
+#include "window_size_limits.h"
 
 #include <optional>
 #include <iterator>
@@ -100,9 +101,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               LPARAM const lparam) noexcept {
   if (message == WM_GETMINMAXINFO) {
     auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-    const UINT dpi = GetDpiForWindow(hwnd);
-    limits->ptMinTrackSize.x = MulDiv(800, dpi == 0 ? 96 : dpi, 96);
-    limits->ptMinTrackSize.y = MulDiv(600, dpi == 0 ? 96 : dpi, 96);
+    const auto sizes = niran::GetWindowSizeLimits(
+        hwnd, MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+    limits->ptMinTrackSize = {sizes.min_width, sizes.min_height};
+    limits->ptMaxTrackSize = {sizes.max_width, sizes.max_height};
     return 0;
   }
   if (message == niran::WindowsBackendBridge::kAsyncCompletionMessage &&
@@ -141,6 +143,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_EXITSIZEMOVE:
+      SaveWindowBounds(hwnd);
+      break;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

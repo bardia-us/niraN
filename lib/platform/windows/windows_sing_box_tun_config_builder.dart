@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'windows_routing_policy.dart';
 
 final class WindowsSingBoxTunConfigBuilder {
   const WindowsSingBoxTunConfigBuilder();
@@ -24,13 +25,13 @@ final class WindowsSingBoxTunConfigBuilder {
     if (!const {'global', 'bypassIran', 'custom'}.contains(routingMode)) {
       throw const FormatException('Unsupported TUN routing mode');
     }
-    if (routingMode == 'bypassIran' && iranCidrs.isEmpty) {
+    if (WindowsRoutingPolicy.bypassIran(settings) && iranCidrs.isEmpty) {
       throw const FormatException('Iran CIDR assets are unavailable');
     }
 
     final config = <String, Object?>{
       'log': _log(settings),
-      'dns': _dns(settings, routingMode, proxyServerHost),
+      'dns': buildDns(settings, routingMode, proxyServerHost),
       'inbounds': [
         {
           'type': 'tun',
@@ -52,7 +53,7 @@ final class WindowsSingBoxTunConfigBuilder {
           'server_port': xraySocksPort,
           'version': '5',
         },
-        {'type': 'direct', 'tag': 'direct'},
+        {'type': 'direct', 'tag': 'direct', 'domain_resolver': 'local-dns'},
       ],
       'route': {
         'auto_detect_interface': true,
@@ -61,7 +62,7 @@ final class WindowsSingBoxTunConfigBuilder {
           'server': 'bootstrap-dns',
           'strategy': _dnsStrategy(settings),
         },
-        'rules': _routeRules(
+        'rules': buildRouteRules(
           settings,
           routingMode,
           iranCidrs,
@@ -108,7 +109,7 @@ final class WindowsSingBoxTunConfigBuilder {
     }
   }
 
-  Map<String, Object?> _dns(
+  Map<String, Object?> buildDns(
     Map<String, Object?> settings,
     String routingMode,
     String? proxyServerHost,
@@ -127,8 +128,13 @@ final class WindowsSingBoxTunConfigBuilder {
       detour: 'proxy',
       domainResolver: 'bootstrap-dns',
     );
-    final servers = <Map<String, Object?>>[bootstrap, remote];
-    if (routingMode != 'global') {
+    final servers = <Map<String, Object?>>[
+      bootstrap,
+      remote,
+      {'type': 'local', 'tag': 'local-dns'},
+    ];
+    if (WindowsRoutingPolicy.bypassIran(settings) ||
+        WindowsRoutingPolicy.customEnabled(settings)) {
       servers.add(
         _dnsServer(
           _firstResolver('${settings['domesticDns'] ?? '223.5.5.5'}'),
@@ -138,7 +144,7 @@ final class WindowsSingBoxTunConfigBuilder {
         ),
       );
     }
-    final customDnsDomains = routingMode == 'custom'
+    final customDnsDomains = WindowsRoutingPolicy.customEnabled(settings)
         ? _customDomainFields('${settings['customDomains'] ?? ''}')
         : const <String, Object?>{};
     return {
@@ -152,7 +158,13 @@ final class WindowsSingBoxTunConfigBuilder {
             'action': 'route',
             'server': 'bootstrap-dns',
           },
-        if (routingMode == 'bypassIran')
+        {
+          'domain': ['localhost'],
+          'domain_suffix': ['.localhost', '.local'],
+          'action': 'route',
+          'server': 'local-dns',
+        },
+        if (WindowsRoutingPolicy.bypassIran(settings))
           {
             'domain': ['localhost'],
             'domain_suffix': ['.ir', '.local'],
@@ -211,13 +223,14 @@ final class WindowsSingBoxTunConfigBuilder {
     };
   }
 
-  List<Map<String, Object?>> _routeRules(
+  List<Map<String, Object?>> buildRouteRules(
     Map<String, Object?> settings,
     String routingMode,
     List<String> iranCidrs,
     List<String> tunAddresses,
-    List<String> protectedProcessPaths,
-  ) {
+    List<String> protectedProcessPaths, {
+    bool tun = true,
+  }) {
     final rules = <Map<String, Object?>>[
       if (protectedProcessPaths.isNotEmpty)
         {
@@ -225,23 +238,42 @@ final class WindowsSingBoxTunConfigBuilder {
           'action': 'route',
           'outbound': 'direct',
         },
+      if (tun)
+        {
+          'ip_cidr': tunAddresses.map(_singleAddressPrefix).toList(),
+          'action': 'reject',
+          'method': 'drop',
+        },
+    ];
+    rules.addAll([
       {
-        'ip_cidr': tunAddresses.map(_singleAddressPrefix).toList(),
-        'action': 'reject',
-        'method': 'drop',
+        'domain': ['localhost'],
+        'domain_suffix': ['.localhost', '.local'],
+        'action': 'route',
+        'outbound': 'direct',
       },
       {
-        'inbound': ['tun-in'],
+        'ip_cidr': WindowsRoutingPolicy.localCidrs,
+        'action': 'route',
+        'outbound': 'direct',
+      },
+      {
+        'inbound': [
+          if (tun) 'tun-in' else ...['socks-in', 'http-in'],
+        ],
         'action': 'sniff',
         'timeout': '300ms',
       },
-      {
-        'inbound': ['tun-in'],
-        'port': [53],
-        'action': 'hijack-dns',
-      },
-    ];
-    if (routingMode == 'bypassIran') {
+      if (tun || settings['enableLocalDns'] != false)
+        {
+          'inbound': [
+            if (tun) 'tun-in' else ...['socks-in', 'http-in'],
+          ],
+          'port': [53],
+          'action': 'hijack-dns',
+        },
+    ]);
+    if (WindowsRoutingPolicy.bypassIran(settings)) {
       rules.addAll([
         {
           'domain': ['localhost'],
@@ -252,7 +284,8 @@ final class WindowsSingBoxTunConfigBuilder {
         {'ip_is_private': true, 'action': 'route', 'outbound': 'direct'},
         {'ip_cidr': iranCidrs, 'action': 'route', 'outbound': 'direct'},
       ]);
-    } else if (routingMode == 'custom') {
+    }
+    if (WindowsRoutingPolicy.customEnabled(settings)) {
       rules.add({
         'ip_is_private': true,
         'action': 'route',
@@ -266,6 +299,13 @@ final class WindowsSingBoxTunConfigBuilder {
       if (ips.isNotEmpty) {
         rules.add({'ip_cidr': ips, 'action': 'route', 'outbound': 'direct'});
       }
+    }
+    if (settings['blockQuic'] == true) {
+      rules.add({
+        'network': 'udp',
+        'port': [443],
+        'action': 'reject',
+      });
     }
     return rules;
   }

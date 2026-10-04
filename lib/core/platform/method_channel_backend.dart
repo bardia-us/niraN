@@ -81,6 +81,9 @@ final class MethodChannelPlatformBackend implements NiranPlatformBackend {
   Future<void> disconnect() => _methods.invokeMethod('disconnect');
 
   @override
+  Future<void> refreshPublicIp() => _methods.invokeMethod('refreshPublicIp');
+
+  @override
   Future<void> setSystemProxy() => _methods.invokeMethod('setSystemProxy');
 
   @override

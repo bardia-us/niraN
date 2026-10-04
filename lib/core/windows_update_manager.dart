@@ -225,7 +225,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
     if (!_safeAsset(asset.url, asset.name)) {
       throw const FormatException('Unsafe update asset');
     }
-    if (asset.version?.compareTo(version) != 0 ||
+    if (!asset.matchesVersion(version) ||
         !await _assetMatchesInstallation(asset)) {
       throw const FormatException(
         'Update package does not match this installation',
@@ -276,7 +276,7 @@ final class WindowsUpdateManager extends ChangeNotifier {
     SemanticVersion version,
   ) async {
     if (!_safeAsset(asset.url, asset.name) ||
-        asset.version?.compareTo(version) != 0 ||
+        !asset.matchesVersion(version) ||
         !await _assetMatchesInstallation(asset) ||
         asset.size <= 0 ||
         asset.sha256 == null ||

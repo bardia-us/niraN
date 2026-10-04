@@ -174,6 +174,77 @@ class SubscriptionUsage {
   final bool expired;
 }
 
+/// Bytes measured by niraN's selected proxy Core, since local tracking began.
+/// Null means unobserved; subscription-provider and Windows-adapter totals are
+/// deliberately not substituted for missing Core counters.
+class TrafficUsage {
+  const TrafficUsage({
+    this.available = false,
+    this.serverId,
+    this.localDay,
+    this.sessionUpload,
+    this.sessionDownload,
+    this.lifetimeUpload,
+    this.lifetimeDownload,
+    this.todayUpload,
+    this.todayDownload,
+    this.aggregateTodayUpload,
+    this.aggregateTodayDownload,
+    this.uploadBytesPerSecond,
+    this.downloadBytesPerSecond,
+    this.unavailableReason,
+  });
+
+  factory TrafficUsage.fromMap(Map<dynamic, dynamic> map) => TrafficUsage(
+    available: map['available'] == true,
+    serverId: map['serverId']?.toString(),
+    localDay: map['localDay']?.toString(),
+    sessionUpload: _int(map['sessionUpload']),
+    sessionDownload: _int(map['sessionDownload']),
+    lifetimeUpload: _int(map['lifetimeUpload']),
+    lifetimeDownload: _int(map['lifetimeDownload']),
+    todayUpload: _int(map['todayUpload']),
+    todayDownload: _int(map['todayDownload']),
+    aggregateTodayUpload: _int(map['aggregateTodayUpload']),
+    aggregateTodayDownload: _int(map['aggregateTodayDownload']),
+    uploadBytesPerSecond: (map['uploadBytesPerSecond'] as num?)?.toDouble(),
+    downloadBytesPerSecond: (map['downloadBytesPerSecond'] as num?)?.toDouble(),
+    unavailableReason: map['unavailableReason']?.toString(),
+  );
+
+  final bool available;
+  final String? serverId;
+  final String? localDay;
+  final int? sessionUpload;
+  final int? sessionDownload;
+  final int? lifetimeUpload;
+  final int? lifetimeDownload;
+  final int? todayUpload;
+  final int? todayDownload;
+  final int? aggregateTodayUpload;
+  final int? aggregateTodayDownload;
+  final double? uploadBytesPerSecond;
+  final double? downloadBytesPerSecond;
+  final String? unavailableReason;
+
+  Map<String, Object?> toMap() => {
+    'available': available,
+    'serverId': serverId,
+    'localDay': localDay,
+    'sessionUpload': sessionUpload,
+    'sessionDownload': sessionDownload,
+    'lifetimeUpload': lifetimeUpload,
+    'lifetimeDownload': lifetimeDownload,
+    'todayUpload': todayUpload,
+    'todayDownload': todayDownload,
+    'aggregateTodayUpload': aggregateTodayUpload,
+    'aggregateTodayDownload': aggregateTodayDownload,
+    'uploadBytesPerSecond': uploadBytesPerSecond,
+    'downloadBytesPerSecond': downloadBytesPerSecond,
+    'unavailableReason': unavailableReason,
+  };
+}
+
 class NativeSettings {
   const NativeSettings({
     this.connectionMode = 'proxy',
@@ -181,6 +252,9 @@ class NativeSettings {
     this.systemProxyState = 'other',
     this.tunEnabled = false,
     this.routingMode = 'bypassIran',
+    this.bypassIran = true,
+    this.customRulesEnabled = false,
+    this.coreByProtocol = const {},
     this.customDomains = '',
     this.customIps = '',
     this.enableLocalDns = true,
@@ -230,6 +304,14 @@ class NativeSettings {
     this.autoUpdate = true,
     this.updateIntervalHours = 12,
     this.themeMode = 'system',
+    this.accentColor = 'purple',
+    this.darkStyle = 'graphite',
+    this.sidebarRight = false,
+    this.soundEffects = true,
+    this.soundStyle = 'notification',
+    this.homeLayout = '',
+    this.homeUsageSide = 'right',
+    this.homeControlOrder = 'systemProxy,clearProxy,tun',
     this.language = 'en',
     this.performanceMode = false,
     this.performanceModePrompted = false,
@@ -249,6 +331,15 @@ class NativeSettings {
         map['tunEnabled'] == true ||
         (!map.containsKey('tunEnabled') && map['connectionMode'] == 'vpn'),
     routingMode: '${map['routingMode'] ?? 'bypassIran'}',
+    bypassIran: map['bypassIran'] is bool
+        ? map['bypassIran'] as bool
+        : (map['routingMode'] ?? 'bypassIran') == 'bypassIran',
+    customRulesEnabled: map['customRulesEnabled'] is bool
+        ? map['customRulesEnabled'] as bool
+        : map['routingMode'] == 'custom',
+    coreByProtocol:
+        (map['coreByProtocol'] as Map?)?.map((k, v) => MapEntry('$k', '$v')) ??
+        const {},
     customDomains: '${map['customDomains'] ?? ''}',
     customIps: '${map['customIps'] ?? ''}',
     enableLocalDns: map['enableLocalDns'] != false,
@@ -300,6 +391,15 @@ class NativeSettings {
     autoUpdate: map['autoUpdate'] != false,
     updateIntervalHours: _int(map['updateIntervalHours']) ?? 12,
     themeMode: '${map['themeMode'] ?? 'system'}',
+    accentColor: '${map['accentColor'] ?? 'purple'}',
+    darkStyle: '${map['darkStyle'] ?? 'graphite'}',
+    sidebarRight: map['sidebarRight'] == true,
+    soundEffects: map['soundEffects'] != false,
+    soundStyle: map['soundStyle'] == 'classic' ? 'classic' : 'notification',
+    homeLayout: map['homeLayout'] is String ? map['homeLayout'] as String : '',
+    homeUsageSide: map['homeUsageSide'] == 'left' ? 'left' : 'right',
+    homeControlOrder:
+        '${map['homeControlOrder'] ?? 'systemProxy,clearProxy,tun'}',
     language: '${map['language'] ?? 'en'}',
     performanceMode: map['performanceMode'] == true,
     performanceModePrompted: map['performanceModePrompted'] == true,
@@ -315,6 +415,9 @@ class NativeSettings {
   final String systemProxyState;
   final bool tunEnabled;
   final String routingMode;
+  final bool bypassIran;
+  final bool customRulesEnabled;
+  final Map<String, String> coreByProtocol;
   final String customDomains;
   final String customIps;
   final bool enableLocalDns;
@@ -364,6 +467,25 @@ class NativeSettings {
   final bool autoUpdate;
   final int updateIntervalHours;
   final String themeMode;
+  final String accentColor;
+  final String darkStyle;
+  final bool sidebarRight;
+  final bool soundEffects;
+  final String soundStyle;
+  final String homeLayout;
+  final String homeUsageSide;
+  final String homeControlOrder;
+
+  List<String> get orderedHomeControls {
+    const valid = ['systemProxy', 'clearProxy', 'tun'];
+    final values = homeControlOrder.split(',');
+    return values.length == 3 &&
+            values.toSet().length == 3 &&
+            values.every(valid.contains)
+        ? values
+        : valid;
+  }
+
   final String language;
   final bool performanceMode;
   final bool performanceModePrompted;
@@ -389,6 +511,19 @@ class NativeSettings {
       systemProxyState: stringValue('systemProxyState', systemProxyState),
       tunEnabled: boolValue('tunEnabled', tunEnabled),
       routingMode: stringValue('routingMode', routingMode),
+      bypassIran: values.containsKey('routingMode')
+          ? values['routingMode'] == 'bypassIran'
+          : boolValue('bypassIran', bypassIran),
+      customRulesEnabled: values.containsKey('routingMode')
+          ? values['routingMode'] == 'custom'
+          : boolValue('customRulesEnabled', customRulesEnabled),
+      coreByProtocol: {
+        ...coreByProtocol,
+        ...(values['coreByProtocol'] as Map?)?.map(
+              (k, v) => MapEntry('$k', '$v'),
+            ) ??
+            {},
+      },
       customDomains: stringValue('customDomains', customDomains),
       customIps: stringValue('customIps', customIps),
       enableLocalDns: boolValue('enableLocalDns', enableLocalDns),
@@ -456,6 +591,14 @@ class NativeSettings {
       autoUpdate: boolValue('autoUpdate', autoUpdate),
       updateIntervalHours: intValue('updateIntervalHours', updateIntervalHours),
       themeMode: stringValue('themeMode', themeMode),
+      accentColor: stringValue('accentColor', accentColor),
+      darkStyle: stringValue('darkStyle', darkStyle),
+      sidebarRight: boolValue('sidebarRight', sidebarRight),
+      soundEffects: boolValue('soundEffects', soundEffects),
+      soundStyle: stringValue('soundStyle', soundStyle),
+      homeLayout: stringValue('homeLayout', homeLayout),
+      homeUsageSide: stringValue('homeUsageSide', homeUsageSide),
+      homeControlOrder: stringValue('homeControlOrder', homeControlOrder),
       language: stringValue('language', language),
       performanceMode: boolValue('performanceMode', performanceMode),
       performanceModePrompted: boolValue(
@@ -515,6 +658,7 @@ class AppSnapshot {
     this.servers = const [],
     this.connection = const ConnectionInfo(),
     this.usage = const SubscriptionUsage(),
+    this.traffic = const TrafficUsage(),
     this.settings = const NativeSettings(),
     this.logs = const [],
     this.lastUpdated = 0,
@@ -531,6 +675,7 @@ class AppSnapshot {
   final List<ServerInfo> servers;
   final ConnectionInfo connection;
   final SubscriptionUsage usage;
+  final TrafficUsage traffic;
   final NativeSettings settings;
   final List<LogEntry> logs;
   final int lastUpdated;
@@ -554,6 +699,7 @@ class AppSnapshot {
     List<ServerInfo>? servers,
     ConnectionInfo? connection,
     SubscriptionUsage? usage,
+    TrafficUsage? traffic,
     NativeSettings? settings,
     List<LogEntry>? logs,
     int? lastUpdated,
@@ -570,6 +716,7 @@ class AppSnapshot {
     servers: servers ?? this.servers,
     connection: connection ?? this.connection,
     usage: usage ?? this.usage,
+    traffic: traffic ?? this.traffic,
     settings: settings ?? this.settings,
     logs: logs ?? this.logs,
     lastUpdated: lastUpdated ?? this.lastUpdated,
