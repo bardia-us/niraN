@@ -120,11 +120,8 @@ class LightweightLiquidGlass extends StatefulWidget {
 
   // Cache the FragmentProgram (compiled shader code) globally
   static ui.FragmentProgram? _cachedProgram;
-  static bool _isPreparing = false;
+  static Future<void>? _preparation;
 
-  // On native: Share one shader instance (efficient)
-  // On web: Each widget needs its own instance (CanvasKit requirement)
-  static ui.FragmentShader? _sharedShader; // Native only
 
   // Dummy 1x1 transparent image for when no background is captured.
   // Lazily allocated on first paint to guarantee zero GPU raster work
@@ -148,16 +145,15 @@ class LightweightLiquidGlass extends StatefulWidget {
   @visibleForTesting
   static void resetForTesting() {
     _cachedProgram = null;
-    _sharedShader = null;
-    _isPreparing = false;
+    _preparation = null;
     _dummyImage?.dispose();
     _dummyImage = null;
   }
 
   /// Global pre-warm method - loads and compiles the shader program.
-  static Future<void> preWarm() async {
-    if (_cachedProgram != null || _isPreparing) return;
-    _isPreparing = true;
+  static Future<void> preWarm() => _preparation ??= _loadProgram();
+
+  static Future<void> _loadProgram() async {
     const path = 'packages/liquid_glass_widgets/shaders/lightweight_glass.frag';
     const testPath = 'shaders/lightweight_glass.frag';
 
@@ -171,14 +167,8 @@ class LightweightLiquidGlass extends StatefulWidget {
       }
       _cachedProgram = program;
 
-      // On native platforms, create the shared shader instance
-      if (!kIsWeb) {
-        _sharedShader = program.fragmentShader();
-      }
     } catch (e) {
       debugPrint('[LightweightGlass] Pre-warm failed: $e');
-    } finally {
-      _isPreparing = false;
     }
   }
 
@@ -188,7 +178,9 @@ class LightweightLiquidGlass extends StatefulWidget {
 
 class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  ui.FragmentShader? _webShader; // Web only: per-widget instance
+  // Programs are immutable and cached. Uniforms/samplers belong to the surface
+  // that paints them, including retained display lists and raster caches.
+  ui.FragmentShader? _surfaceShader;
   bool _isDisposed = false;
   bool _loggedCreation = false;
   ui.Image? _backgroundImage;
@@ -395,14 +387,13 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
       await LightweightLiquidGlass.preWarm();
     }
 
-    // On web, create a per-widget shader instance
-    if (kIsWeb && LightweightLiquidGlass._cachedProgram != null) {
+    if (LightweightLiquidGlass._cachedProgram != null) {
       if (mounted) {
         setState(() {
-          _webShader = LightweightLiquidGlass._cachedProgram!.fragmentShader();
-          if (!_loggedCreation) {
+          _surfaceShader = LightweightLiquidGlass._cachedProgram!.fragmentShader();
+          if (kIsWeb && !_loggedCreation) {
             debugPrint(
-                '[LightweightGlass] ✓ Created web shader for ${widget.shape.runtimeType}');
+                '[LightweightGlass] ✓ Created surface shader for ${widget.shape.runtimeType}');
             _loggedCreation = true;
           }
         });
@@ -419,17 +410,13 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
     // texture retention chain during isolate shutdown on Mali GPUs.
     _backgroundImage?.dispose();
     _backgroundImage = null;
-    // On web, dispose this widget's shader instance
-    if (kIsWeb && _webShader != null) {
-      _webShader!.dispose();
-      _webShader = null;
-    }
-    // Never dispose the shared shader on native
+    _surfaceShader?.dispose();
+    _surfaceShader = null;
     super.dispose();
   }
 
   ui.FragmentShader? get _activeShader {
-    return kIsWeb ? _webShader : LightweightLiquidGlass._sharedShader;
+    return _surfaceShader;
   }
 
   @override
@@ -807,19 +794,6 @@ class _RenderLightweightGlass extends RenderProxyBox
 
   void _paintGlassContent(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
-    final matrix = canvas.getTransform();
-
-    final canvasPhysicalX = matrix[12];
-    final canvasPhysicalY = matrix[13];
-    final scaleX = matrix[0];
-    final scaleY = matrix[5];
-
-    final uOrigin = Offset(
-      canvasPhysicalX + (offset.dx * scaleX),
-      canvasPhysicalY + (offset.dy * scaleY),
-    );
-
-    final uScale = Offset(scaleX, scaleY);
 
     Offset bgRelativeOffset = Offset.zero;
     Size bgSize = const Size(1, 1);
@@ -837,7 +811,10 @@ class _RenderLightweightGlass extends RenderProxyBox
       }
     }
 
-    _updateShaderUniforms(size, uOrigin, uScale, bgRelativeOffset, bgSize);
+    // Paint shaders use FlutterFragCoord's local canvas coordinates, not
+    // physical window coordinates. Keep the SDF in the same local space as
+    // its clip; FittedBox, DPI and hover transforms are applied by the canvas.
+    _updateShaderUniforms(size, Offset.zero, const Offset(1, 1), bgRelativeOffset, bgSize);
 
     if (_backgroundImage != null) {
       _shader!.setImageSampler(
@@ -854,7 +831,10 @@ class _RenderLightweightGlass extends RenderProxyBox
     }
 
     final paint = Paint()..shader = _shader!;
-    canvas.drawRect(offset & size, paint);
+    canvas.save();
+    canvas.translate(offset.dx, offset.dy);
+    canvas.drawRect(Offset.zero & size, paint);
+    canvas.restore();
 
     super.paint(context, offset);
   }

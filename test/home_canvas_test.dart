@@ -94,7 +94,12 @@ void main() {
   testWidgets(
     'stationary edit cards share their backdrop but a dragged card does not',
     (tester) async {
-      await mount(tester, CanvasController());
+      // Proxy controls are Clay now. Connected mode exposes both glass TUN
+      // and Restart controls, so this exercises overlap grouping of glass.
+      await mount(
+        tester,
+        CanvasController(connection: const ConnectionInfo(state: 'connected')),
+      );
       await edit(tester);
       final board = find.byKey(const Key('home-control-canvas'));
       final filters = find.descendant(
@@ -112,7 +117,7 @@ void main() {
       );
       expect(
         actionRect.width,
-        lessThan(200),
+        lessThan(tester.view.physicalSize.width / 4),
         reason: 'Home actions must not fill a quarter of a desktop page',
       );
       final tileDecorations = tester.widgetList<DecoratedBox>(
@@ -147,10 +152,11 @@ void main() {
               as BoxDecoration;
       expect(closeDecoration.shape, BoxShape.circle);
       final gesture = await tester.startGesture(
-        tester.getCenter(find.byKey(const Key('home-tile-clearProxy'))),
+        tester.getCenter(find.byKey(const Key('home-tile-tun'))),
         kind: PointerDeviceKind.mouse,
       );
       await gesture.moveBy(const Offset(30, 0));
+      await gesture.moveBy(const Offset(15, 0));
       await tester.pump(const Duration(milliseconds: 50));
       final movingKeys = tester
           .renderObjectList<RenderBackdropFilter>(filters)

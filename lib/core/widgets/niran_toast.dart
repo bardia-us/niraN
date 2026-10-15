@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'simple_frosted_surface.dart';
+import 'clay_surface.dart';
 
 void showNiranToast(
   BuildContext context,
@@ -22,17 +23,27 @@ void showNiranToast(
       duration: const Duration(milliseconds: 2600),
       content: SimpleFrostedSurface(
         radius: 16,
+        color: colors.surfaceContainerHigh.withValues(alpha: .93),
+        borderColor: colors.onSurface.withValues(alpha: .22),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
-              Icon(icon, size: 18, color: colors.primary),
+              ClaySurface(
+                radius: 11,
+                selected: true,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(icon, size: 18, color: colors.primary),
+                ),
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   message,
-                  style: Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(color: colors.onSurface),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: colors.onSurface),
                 ),
               ),
             ],

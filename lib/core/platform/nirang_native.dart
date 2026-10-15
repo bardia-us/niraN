@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../startup_ui_readiness.dart';
 import '../../platform/windows/windows_platform_backend.dart';
 import 'method_channel_backend.dart';
 import 'platform_backend.dart';
@@ -11,8 +12,9 @@ import 'platform_backend.dart';
 class NirangNative {
   NirangNative._();
 
+  static final startupUiReadiness = StartupUiReadiness();
   static final NiranPlatformBackend _backend = Platform.isWindows
-      ? WindowsPlatformBackend()
+      ? WindowsPlatformBackend(startupReady: startupUiReadiness.ready)
       : MethodChannelPlatformBackend();
 
   static Stream<Map<dynamic, dynamic>> get events => _backend.events;
@@ -54,6 +56,16 @@ class NirangNative {
   static Future<void> openExternalUrl(String url) =>
       _backend.openExternalUrl(url);
   static Future<void> exitApplication() => _backend.exitApplication();
+  static Future<void> restartApplication() {
+    final backend = _backend;
+    if (backend is NiranRestartableBackend) {
+      return (backend as NiranRestartableBackend).restartApplication();
+    }
+    throw UnsupportedError(
+      'Application restart is not supported on this platform',
+    );
+  }
+
   static Future<void> recordTelegramDecision(String decision) =>
       _backend.recordTelegramDecision(decision);
   static Future<void> recordFlutterError(String message) =>

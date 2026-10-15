@@ -7,13 +7,13 @@ import '../../core/platform/native_models.dart';
 import '../../core/platform/nirang_native.dart';
 import '../../core/registration/device_registration.dart';
 import '../../core/desktop_feedback.dart';
+import '../../core/startup_trace.dart';
 
 final appControllerProvider = AsyncNotifierProvider<AppController, AppSnapshot>(
   AppController.new,
 );
 
-// Retained provider identity for existing widgets; legacy Windows performance
-// preferences no longer disable the design system. OS reduced motion is separate.
+// main overrides once with the boot preference. Settings never hot-swap GPUs.
 final performanceModeProvider = Provider<bool>((ref) => false);
 
 class AppController extends AsyncNotifier<AppSnapshot> {
@@ -40,7 +40,10 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       },
     );
     ref.onDispose(() => _events?.cancel());
-    return _parseBootstrap(await NirangNative.initialize());
+    final bootstrap = await NirangNative.initialize();
+    final snapshot = _parseBootstrap(bootstrap);
+    StartupTrace.mark(StartupPhase.controllerReady);
+    return snapshot;
   }
 
   AppSnapshot? get _current => state.asData?.value;
@@ -436,6 +439,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
   Future<void> openExternalUrl(Uri url) =>
       NirangNative.openExternalUrl(url.toString());
   Future<void> exitApplication() => NirangNative.exitApplication();
+  Future<void> restartApplication() => NirangNative.restartApplication();
 
   Future<void> recordTelegramDecision(String decision) async {
     await NirangNative.recordTelegramDecision(decision);
@@ -539,6 +543,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
 }
 
 const _networkSettingKeys = <String>{
+  'localBypassMode',
   'tunEnabled',
   'routingMode',
   'customDomains',

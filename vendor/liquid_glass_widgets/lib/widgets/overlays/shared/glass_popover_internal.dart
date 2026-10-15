@@ -334,9 +334,16 @@ class _GlassPopoverState extends State<GlassPopover>
     // the builder closure) so it is stable across animation ticks.
     final Widget triggerContent = widget.triggerBuilder != null
         ? widget.triggerBuilder!(context, _togglePopover)
-        : GestureDetector(
-            onTap: _togglePopover,
-            child: widget.trigger,
+        // A plain trigger (an icon, a text) gets the button role here; its
+        // text, if any, merges into this node as the name.
+        : Semantics(
+            container: true,
+            button: true,
+            label: widget.semanticLabel,
+            child: GestureDetector(
+              onTap: _togglePopover,
+              child: widget.trigger,
+            ),
           );
 
     return AnimatedBuilder(
@@ -634,7 +641,16 @@ class _GlassPopoverState extends State<GlassPopover>
     final popoverHeight = _effectivePopoverHeight(insets);
 
     // 1. Determine alignment (auto vs. manual)
-    if (widget.alignment == null ||
+    final stripAlignment = verticalBarPresentationAlignment(
+      context,
+      position & _triggerSize!,
+    );
+    if ((widget.alignment == null ||
+            widget.alignment == GlassMenuAlignment.none) &&
+        stripAlignment != null) {
+      // From iPhone Duo's vertical bar strip: towards the content.
+      _morphAlignment = stripAlignment;
+    } else if (widget.alignment == null ||
         widget.alignment == GlassMenuAlignment.none) {
       final isRightHalf = screenWidth.isFinite && position.dx > screenWidth / 2;
 
@@ -660,8 +676,12 @@ class _GlassPopoverState extends State<GlassPopover>
     if (widget.autoAdjustToScreen) {
       final double safeTop = widget.screenPadding.top + insets.top;
       final double safeBottom = widget.screenPadding.bottom + insets.bottom;
-      final double safeLeft = widget.screenPadding.left + insets.left;
-      final double safeRight = widget.screenPadding.right + insets.right;
+      // The strip's inset is no bar to a popover opened out of the strip,
+      // which natively lies over the item it came from.
+      final double safeLeft = widget.screenPadding.left +
+          (stripAlignment == null ? insets.left : 0.0);
+      final double safeRight = widget.screenPadding.right +
+          (stripAlignment == null ? insets.right : 0.0);
 
       final double targetX =
           position.dx + (1 + _morphAlignment.x) * _triggerSize!.width / 2;
@@ -841,10 +861,20 @@ class _GlassPopoverState extends State<GlassPopover>
             // ── Tap-to-close barrier ─────────────────────────────────────────
             if (clampedValue > 0.3 && widget.barrierDismissible)
               Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
+                // Named like Flutter's ModalBarrier so a screen reader can
+                // close the popover as well as a pointer can.
+                child: Semantics(
+                  container: true,
+                  label: glassCupertinoLocalizationsOf(context)
+                      .modalBarrierDismissLabel,
+                  onDismiss: _closePopover,
                   onTap: _closePopover,
-                  child: const ColoredBox(color: Color(0x00000000)),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    excludeFromSemantics: true,
+                    onTap: _closePopover,
+                    child: const ColoredBox(color: Color(0x00000000)),
+                  ),
                 ),
               ),
 

@@ -20,6 +20,10 @@ class FlutterWindow : public Win32Window {
   explicit FlutterWindow(const flutter::DartProject& project);
   virtual ~FlutterWindow();
 
+  // Present only after saved native bounds are applied, before requesting paint.
+  void PresentStartup();
+  bool RestartRequested() const { return restart_requested_; }
+
  protected:
   // Win32Window:
   bool OnCreate() override;
@@ -41,6 +45,7 @@ class FlutterWindow : public Win32Window {
   NOTIFYICONDATAW tray_icon_{};
   bool tray_added_ = false;
   bool exit_requested_ = false;
+  bool restart_requested_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

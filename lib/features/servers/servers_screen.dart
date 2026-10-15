@@ -82,19 +82,20 @@ class _ServersScreenState extends ConsumerState<ServersScreen> {
                     thumbVisibility: true,
                     interactive: true,
                     child: ScrollConfiguration(
-                      behavior: ScrollConfiguration.of(context)
-                          .copyWith(scrollbars: false),
+                      behavior: ScrollConfiguration.of(
+                        context,
+                      ).copyWith(scrollbars: false),
                       child: ReorderableListView.builder(
                         key: const PageStorageKey('servers-scroll'),
                         scrollController: _scroll,
                         scrollCacheExtent: const ScrollCacheExtent.pixels(360),
                         buildDefaultDragHandles: false,
                         itemCount: app.servers.length,
-                        padding: const EdgeInsets.fromLTRB(
+                        padding: EdgeInsets.fromLTRB(
                           20,
                           headerHeight + 16,
                           20,
-                          16,
+                          16 + MediaQuery.paddingOf(context).bottom,
                         ),
                         // Retain the controller's pre-removal index contract.
                         // ignore: deprecated_member_use
@@ -532,12 +533,15 @@ class _ServersGlassHeader extends StatelessWidget {
         ),
       ),
     );
-    return GlassSurface(
-      radius: 22,
-      blur: messagesLiquidBlur,
-      saturation: messagesLiquidSaturation,
-      liveLiquid: true,
-      child: content,
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      child: GlassSurface(
+        radius: 22,
+        blur: messagesLiquidBlur,
+        saturation: messagesLiquidSaturation,
+        liveLiquid: true,
+        child: content,
+      ),
     );
   }
 }

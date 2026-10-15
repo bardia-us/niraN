@@ -6,12 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/vpn/app_controller.dart';
 import 'snapshot_glass.dart';
 import 'live_liquid_glass.dart';
+import 'liquid_glass_rim.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as glass;
+import '../render_mode.dart';
 
 enum GlassSurfaceStyle { liquid, flat }
 
 /// Windows-compatible counterpart of niraNG's Liquid Glass surface.
 ///
-/// Opted-in surfaces use live image-filter shaders when the Windows renderer
+/// Liquid surfaces use live image-filter shaders when the Windows renderer
 /// supports them. Unsupported renderers keep the prepared snapshot/frosted
 /// fallback; flat config rows never receive the 3D lens.
 class GlassSurface extends ConsumerWidget {
@@ -73,20 +76,6 @@ class GlassSurface extends ConsumerWidget {
     final borderRadius = BorderRadius.circular(radius);
     final content = Padding(padding: padding ?? EdgeInsets.zero, child: child);
 
-    if (reducedEffects) {
-      final opaqueSurface = overlayColor == null
-          ? scheme.surfaceContainerHigh
-          : Color.alphaBlend(overlayColor!, scheme.surfaceContainerHigh);
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          color: opaqueSurface,
-          border: Border.all(color: scheme.outlineVariant),
-          borderRadius: borderRadius,
-        ),
-        child: content,
-      );
-    }
-
     if (style == GlassSurfaceStyle.flat) {
       return _FlatGlassSurface(
         borderRadius: borderRadius,
@@ -98,12 +87,23 @@ class GlassSurface extends ConsumerWidget {
       );
     }
 
-    if (liveLiquid && liveGlassReady) {
+    if (reducedEffects) {
+      return LightweightChrome(radius: radius, child: content);
+    }
+
+    final snapshot = SnapshotGlassScope.maybeOf(context);
+    // Every persistent liquid surface uses the same reference material. The
+    // old opt-in flag is retained for source compatibility, not a different look.
+    // Modal snapshots retain the one-off QWEA lens and its captured backdrop.
+    if (snapshot == null || snapshot.isDisposed) {
       return LiveLiquidSurface(
         radius: radius,
         blur: blur,
         saturation: saturation,
         overlayColor: overlayColor,
+        quality: liveGlassReady
+            ? glass.GlassQuality.premium
+            : glass.GlassQuality.standard,
         child: content,
       );
     }
@@ -156,30 +156,26 @@ class GlassSurface extends ConsumerWidget {
                   // alpha and allowed the sharp backdrop to dominate on Windows,
                   // making higher sigma values appear to do nothing.
                   blendMode: BlendMode.srcOver,
-                  child: const SizedBox.expand(),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: ColoredBox(
-                color: scheme.surface.withValues(alpha: dark ? .48 : .44),
-              ),
-            ),
-            if (overlayColor case final color?)
-              Positioned.fill(child: ColoredBox(color: color)),
-            Positioned.fill(
-              child: IgnorePointer(
-                child: CustomPaint(
-                  painter: _LiquidGlassFramePainter(
-                    dark: dark,
-                    radius: radius,
-                    edgeColor: scheme.outline.withValues(
-                      alpha: dark ? .32 : .26,
+                  child: IgnorePointer(
+                    child: LiquidGlassRim(
+                      radius: radius,
+                      strength: dark ? .9 : .75,
                     ),
                   ),
                 ),
               ),
             ),
+            Positioned.fill(
+              child: ColoredBox(
+                // Blur destroys background text; tint is only readability,
+                // not a milky sheet or smoked glass over the optical model.
+                color: scheme.surface.withValues(alpha: dark ? .12 : .14),
+              ),
+            ),
+            if (overlayColor case final color?)
+              Positioned.fill(child: ColoredBox(color: color)),
+            // Snapshot lenses supply their own rim. The live fallback supplies
+            // its rim only when selected, including unavailable modal images.
             content,
           ],
         ),
@@ -225,54 +221,4 @@ class _FlatGlassSurface extends StatelessWidget {
       child: child,
     ),
   );
-}
-
-class _LiquidGlassFramePainter extends CustomPainter {
-  const _LiquidGlassFramePainter({
-    required this.dark,
-    required this.radius,
-    required this.edgeColor,
-  });
-
-  final bool dark;
-  final double radius;
-  final Color edgeColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-    final rect = Offset.zero & size;
-    final path = Path()
-      ..addRRect(
-        RRect.fromRectAndRadius(
-          rect.deflate(.7),
-          Radius.circular((radius - .7).clamp(0, double.infinity)),
-        ),
-      );
-    final glassColor = dark
-        ? Colors.white.withValues(alpha: .025)
-        : Colors.black.withValues(alpha: .015);
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = glassColor
-        ..blendMode = dark ? BlendMode.screen : BlendMode.multiply
-        ..style = PaintingStyle.fill,
-    );
-    // A single quiet perimeter keeps the glass readable and consistent.
-    // Directional rim gradients made large Windows surfaces look layered.
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = edgeColor,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _LiquidGlassFramePainter oldDelegate) =>
-      dark != oldDelegate.dark ||
-      radius != oldDelegate.radius ||
-      edgeColor != oldDelegate.edgeColor;
 }

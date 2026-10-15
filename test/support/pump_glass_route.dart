@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/widgets/shared/lightweight_liquid_glass.dart';
 import 'package:niran/core/widgets/snapshot_glass.dart';
 
 /// Load the shared engine future outside a per-test FakeAsync zone so that it
@@ -6,6 +7,7 @@ import 'package:niran/core/widgets/snapshot_glass.dart';
 Future<void> warmGlassRouteTests() async {
   TestWidgetsFlutterBinding.ensureInitialized();
   expect(await warmSnapshotGlass(), isNotNull);
+  await LightweightLiquidGlass.preWarm();
 }
 
 /// Route creation waits for shader loading, a painted frame and GPU readback.

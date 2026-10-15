@@ -240,8 +240,6 @@ abstract final class NirangVisualEffects {
     required bool reducedEffects,
   }) {
     final background = theme.scaffoldBackgroundColor;
-    if (reducedEffects) return BoxDecoration(color: background);
-
     final scheme = theme.colorScheme;
     if (theme.brightness == Brightness.dark) {
       return BoxDecoration(

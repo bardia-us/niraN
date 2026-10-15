@@ -4,6 +4,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as glass;
 import '../../features/vpn/app_controller.dart';
 import 'glass_surface.dart';
 import 'live_liquid_glass.dart';
+import 'interactive_depth.dart';
 
 class GlassMenuButton extends ConsumerWidget {
   const GlassMenuButton({
@@ -19,31 +20,60 @@ class GlassMenuButton extends ConsumerWidget {
   final FocusNode? focusNode;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (ref.watch(performanceModeProvider) || !liveGlassReady) {
-      return GlassSurface(
+    final reduced = ref.watch(performanceModeProvider);
+    if (reduced || !liveGlassReady) {
+      return InteractiveDepth(
+        hoverLift: reduced ? 1 : 0,
+        tiltEnabled: false,
         radius: 22,
-        liveLiquid: true,
-        child: IconButton(
-          onPressed: onPressed,
-          tooltip: tooltip,
-          focusNode: focusNode,
-          icon: icon,
+        child: GlassSurface(
+          radius: 22,
+          liveLiquid: true,
+          child: IconButton(
+            style: IconButton.styleFrom(
+              overlayColor: reduced
+                  ? Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: .08)
+                  : Colors.transparent,
+              shape: const CircleBorder(),
+            ),
+            onPressed: onPressed,
+            tooltip: tooltip,
+            focusNode: focusNode,
+            icon: icon,
+          ),
         ),
       );
     }
     return Tooltip(
       message: tooltip,
-      child: glass.GlassIconButton(
-        icon: IconTheme.merge(
-          data: IconThemeData(color: Theme.of(context).colorScheme.onSurface),
-          child: icon,
-        ),
-        onPressed: onPressed,
+      child: glass.GlassButton.custom(
+        width: 44,
+        height: 44,
+        interactionScale: .95,
+        ambientBaseLight: 0,
+        onTap: onPressed,
         focusNode: focusNode,
-        semanticLabel: tooltip,
+        label: tooltip,
+        showFocusRing: false,
+        glowColor: Colors.transparent,
+        anchorStretchSettings: const glass.AnchorStretchSettings(
+          intensity: .65,
+          squashFactor: .25,
+          translationDamping: .15,
+          bounciness: .15,
+        ),
         useOwnLayer: true,
         quality: glass.GlassQuality.premium,
         settings: niranLiquidSettings(Theme.of(context).brightness),
+        child: IconTheme.merge(
+          data: IconThemeData(
+            size: 22,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+          child: icon,
+        ),
       ),
     );
   }

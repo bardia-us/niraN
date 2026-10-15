@@ -2,9 +2,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import '../render_mode.dart';
 
 /// A transform-only desktop interaction. It keeps hover work on the compositor
-/// and becomes a plain child when Performance Mode is enabled.
+/// with inexpensive feedback in Performance Mode (no tilt or soft shadow).
 class InteractiveDepth extends StatefulWidget {
   const InteractiveDepth({
     required this.child,
@@ -14,6 +15,7 @@ class InteractiveDepth extends StatefulWidget {
     this.reducedEffects = false,
     this.radius = 14,
     this.tiltEnabled = true,
+    this.hoverLift = 0,
   });
 
   final Widget child;
@@ -22,6 +24,7 @@ class InteractiveDepth extends StatefulWidget {
   final bool reducedEffects;
   final double radius;
   final bool tiltEnabled;
+  final double hoverLift;
 
   @override
   State<InteractiveDepth> createState() => _InteractiveDepthState();
@@ -68,13 +71,17 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
     if (widget.reducedEffects || MediaQuery.disableAnimationsOf(context)) {
       return widget.child;
     }
+    final lightweight = lightweightRenderingOf(context);
+    final tiltEnabled = widget.tiltEnabled && !lightweight;
     final effectsEnabled = widget.enabled;
     final stretch = effectsEnabled && _pressed ? _stretch.distance * .08 : 0.0;
     final direction = _stretch.direction;
     final matrix = Matrix4.identity()
       ..translateByDouble(
         effectsEnabled ? _translation.dx : 0,
-        effectsEnabled ? _translation.dy : 0,
+        effectsEnabled
+            ? _translation.dy - (_hovered && !_pressed ? widget.hoverLift : 0)
+            : 0,
         0,
         1,
       )
@@ -83,24 +90,24 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
       ..setEntry(
         3,
         2,
-        effectsEnabled && widget.tiltEnabled && _tilt != Offset.zero ? .0012 : 0,
+        effectsEnabled && _pressed && tiltEnabled && _tilt != Offset.zero
+            ? .0012
+            : 0,
       )
-      ..rotateX(effectsEnabled && widget.tiltEnabled ? -_tilt.dy * .012 : 0)
-      ..rotateY(effectsEnabled && widget.tiltEnabled ? _tilt.dx * .012 : 0)
+      ..rotateX(
+        effectsEnabled && _pressed && tiltEnabled ? -_tilt.dy * .012 : 0,
+      )
+      ..rotateY(effectsEnabled && _pressed && tiltEnabled ? _tilt.dx * .012 : 0)
       ..scaleByDouble(
         !effectsEnabled
             ? 1
             : _pressed
             ? .982
-            : _hovered
-            ? 1.010
             : 1,
         !effectsEnabled
             ? 1
             : _pressed
             ? .982
-            : _hovered
-            ? 1.010
             : 1,
         1,
         1,
@@ -120,7 +127,7 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
               _tilt = Offset.zero;
             })
           : null,
-      onHover: effectsEnabled && widget.tiltEnabled
+      onHover: effectsEnabled && tiltEnabled
           ? (event) {
               final box = context.findRenderObject();
               if (box is! RenderBox || !box.hasSize) return;
@@ -166,17 +173,22 @@ class _InteractiveDepthState extends State<InteractiveDepth> {
             transformAlignment: Alignment.center,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(widget.radius),
-              boxShadow: effectsEnabled && _hovered
-                  ? [
+              // Spring overshoot must never extrapolate a shadow's blur below
+              // zero when the pointer leaves. Keep geometry fixed; only fade
+              // its colour, leaving the transform's spring motion unchanged.
+              boxShadow: lightweight
+                  ? const []
+                  : [
                       BoxShadow(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.primary.withValues(alpha: .13),
+                        color: effectsEnabled && _hovered
+                            ? Theme.of(
+                                context,
+                              ).colorScheme.primary.withValues(alpha: .13)
+                            : Colors.transparent,
                         blurRadius: 18,
                         offset: const Offset(0, 7),
                       ),
-                    ]
-                  : const [],
+                    ],
             ),
             child: widget.child,
           ),

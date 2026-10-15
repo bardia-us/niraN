@@ -5,6 +5,9 @@ import '../../core/platform/native_models.dart';
 import '../../core/widgets/country_flag_badge.dart';
 import '../vpn/app_controller.dart';
 import 'server_profile_settings_screen.dart';
+import '../../core/widgets/detail_page_header.dart';
+import '../../core/widgets/clay_surface.dart';
+import '../../core/widgets/interactive_depth.dart';
 
 class ServerInformationScreen extends StatelessWidget {
   const ServerInformationScreen({
@@ -18,9 +21,15 @@ class ServerInformationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(context.s('serverInformation'))),
+    extendBodyBehindAppBar: true,
+    appBar: DetailPageHeader(title: context.s('serverInformation')),
     body: ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        kToolbarHeight + MediaQuery.paddingOf(context).top + 8,
+        16,
+        24,
+      ),
       children: [
         Card(
           child: Padding(
@@ -45,7 +54,10 @@ class ServerInformationScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (server.selected) Chip(label: Text(context.s('selected'))),
+                if (server.selected) ...[
+                  const SizedBox(width: 12),
+                  _SelectedProfileBadge(label: context.s('selected')),
+                ],
               ],
             ),
           ),
@@ -84,6 +96,10 @@ class ServerInformationScreen extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         if (controller != null &&
+            const {
+              'tls',
+              'reality',
+            }.contains(server.security.trim().toLowerCase()) &&
             const {
               'VLESS',
               'TROJAN',
@@ -127,6 +143,73 @@ class ServerInformationScreen extends StatelessWidget {
           ],
         ),
       ],
+    ),
+  );
+}
+
+class _SelectedProfileBadge extends StatefulWidget {
+  const _SelectedProfileBadge({required this.label});
+  final String label;
+  @override
+  State<_SelectedProfileBadge> createState() => _SelectedProfileBadgeState();
+}
+
+class _SelectedProfileBadgeState extends State<_SelectedProfileBadge>
+    with SingleTickerProviderStateMixin {
+  late final _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 460),
+  );
+  late final _scale = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween(
+        begin: 1.0,
+        end: 1.055,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 35,
+    ),
+    TweenSequenceItem(
+      tween: Tween(
+        begin: 1.055,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 65,
+    ),
+  ]).animate(_pulse);
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _scale,
+    builder: (context, child) =>
+        Transform.scale(scale: _scale.value, child: child),
+    child: InteractiveDepth(
+      radius: 20,
+      tiltEnabled: false,
+      child: ClaySurface(
+        radius: 20,
+        selected: true,
+        child: TextButton.icon(
+          onPressed: () {
+            if (!MediaQuery.disableAnimationsOf(context)) {
+              _pulse.forward(from: 0);
+            }
+          },
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            overlayColor: Colors.transparent,
+          ),
+          icon: const Icon(Icons.check_circle_rounded, size: 18),
+          label: Text(widget.label),
+        ),
+      ),
     ),
   );
 }

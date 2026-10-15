@@ -25,7 +25,8 @@
 // Fix: every uShapeData[] access uses a literal integer index only.
 // getShapeSDFFromArray() is gone; sdf0()…sdf15() helpers expand each
 // shape slot with hardcoded literal offsets so glslang sees only constants.
-// sceneSDF is fully unrolled — no for-loops, no dynamic indexing.
+// Non-GLES sceneSDF remains unrolled. GLES selects literal-index uniform
+// metadata, then uses bounded local-array loops to avoid driver-link expansion.
 //
 // ── Backward pass correctness ─────────────────────────────────────────────────
 // The symmetric bidirectional blend is a left-fold in both directions:
@@ -135,6 +136,11 @@ float sdfSquircle(in vec2 p, in vec2 b, in float r) {
 }
 
 float sdfSquircleAsym(in vec2 p, in vec2 b, in float rTop, in float rBottom) {
+    // Most shapes round all four corners alike, and then both halves below
+    // are the same squircle: evaluate it once.
+    if (rTop == rBottom) {
+        return sdfSquircle(p, b, rTop);
+    }
     float boxShort = min(b.x, b.y);
     rTop    = min(rTop,    boxShort);
     rBottom = min(rBottom, boxShort);
@@ -250,7 +256,52 @@ float sdf15(vec2 p) { return SDF_SHAPE_N(105); }
 //   be kept in sync — a higher maintenance burden than the unrolled form.
 //   The literal-index version is equally or more efficient on Metal too,
 //   since the compiler can constant-fold and prefetch known offsets.
+// The GLES path below is a measured exception: only local arrays are dynamic;
+// every uniform fetch remains literal, and the original fold order is kept.
 
+#ifdef LGR_OPENGLES_CAP_SHAPES
+// Keep literal UNIFORM indexing (required by the runtime-stage compiler), but
+// select the small metadata tuple before evaluating the expensive SDF. Local
+// array indexing is legal in GLES3/SPIR-V and keeps the SDF body in one bounded
+// loop rather than expanding it eight times at each of five gradient taps.
+void shapeMetadata(int i, out float kind, out vec2 center, out vec2 size,
+                   out float rTop, out float rBottom) {
+#define READ_SHAPE(BASE) \
+    kind=uShapeData[BASE]; \
+    center=vec2(uShapeData[BASE+1],uShapeData[BASE+2]); \
+    size=vec2(uShapeData[BASE+3],uShapeData[BASE+4]); \
+    rTop=uShapeData[BASE+5]; rBottom=uShapeData[BASE+6]; return;
+    if (i == 0) { READ_SHAPE(0) }
+    if (i == 1) { READ_SHAPE(7) }
+    if (i == 2) { READ_SHAPE(14) }
+    if (i == 3) { READ_SHAPE(21) }
+    if (i == 4) { READ_SHAPE(28) }
+    if (i == 5) { READ_SHAPE(35) }
+    if (i == 6) { READ_SHAPE(42) }
+    READ_SHAPE(49)
+#undef READ_SHAPE
+}
+
+float sceneSDF(vec2 p, int n, float k) {
+    if (n <= 0) return 1e9;
+    int count = min(n, 8); // Preserve the existing GLES limit, not a new cap.
+    float distances[8];
+    for (int i = 0; i < count; ++i) {
+        float kind, rTop, rBottom;
+        vec2 center, size;
+        shapeMetadata(i, kind, center, size, rTop, rBottom);
+        distances[i] = getShapeSDF(kind, p, center, size, rTop, rBottom);
+    }
+    if (count == 1) return distances[0];
+    float fwd = distances[0];
+    float bwd = distances[count - 1];
+    for (int i = 1; i < count; ++i) {
+        fwd = smoothUnion(fwd, distances[i], k);
+        bwd = smoothUnion(bwd, distances[count - 1 - i], k);
+    }
+    return mix(fwd, bwd, 0.5);
+}
+#else
 float sceneSDF(vec2 p, int n, float k) {
     if (n <= 0) return 1e9;
 
@@ -464,3 +515,4 @@ float sceneSDF(vec2 p, int n, float k) {
     return mix(fwd, bwd, 0.5);
 #endif
 }
+#endif  // LGR_OPENGLES_CAP_SHAPES

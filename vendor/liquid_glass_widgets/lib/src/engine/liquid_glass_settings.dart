@@ -125,6 +125,7 @@ class LiquidGlassSettings {
     this.rimShade = 0.0,
     this.rimShadeEnds = 0.2,
     this.rimLight = 0.0,
+    this.bodyShade = 0.0,
     this.lensModel = GlassLensModel.spherical,
     this.backerColor,
     this.platformViewFallbackColor,
@@ -166,6 +167,7 @@ class LiquidGlassSettings {
     this.rimShade = 0.0,
     this.rimShadeEnds = 0.2,
     this.rimLight = 0.0,
+    this.bodyShade = 0.0,
     this.lensModel = GlassLensModel.spherical,
     this.backerColor,
     this.platformViewFallbackColor,
@@ -223,9 +225,11 @@ class LiquidGlassSettings {
   /// Measured against the native control on the same screen: the body tint
   /// and saturation, the [frost] and the copy of the content showing
   /// through it, the [rimShade] outline and [rimLight] highlight, and the
-  /// [GlassLensModel.paraxial] rim band. Tuned for [GlassQuality.premium];
-  /// the other paths ignore the new terms, which leaves a near-clear, milky
-  /// glass.
+  /// [GlassLensModel.paraxial] rim band. Tuned for [GlassQuality.premium],
+  /// which draws the full material. The standard path and web approximate it:
+  /// the regular blur stands in for the [frost] and the specular highlight for
+  /// the [rimLight], while the [rimShade] outline, [bodyShade] and the paraxial
+  /// lens band are premium-only.
   ///
   /// ```dart
   /// GlassButton(
@@ -279,9 +283,10 @@ class LiquidGlassSettings {
     fresnelStrength: 0,
     chromaticAberration: 0,
     edgeAbsorption: 0.035,
-    rimShade: 0.45,
+    rimShade: 1,
     rimShadeEnds: 0,
     rimLight: 1.15,
+    bodyShade: 0.28,
     shadowElevation: 0,
   );
 
@@ -650,8 +655,8 @@ class LiquidGlassSettings {
   /// its own position, untinted and unblurred, darkened by a fixed step:
   /// about 31% across the light axis and a fifth of that at its ends, where
   /// the rim light sits ([rimShadeEnds]). Together with [rimLight] this is
-  /// what reads as the "bubble" edge of a native control. `1.0` matches the
-  /// native light material, `0.45` the dark.
+  /// what reads as the "bubble" edge of a native control. `1.0` matches both
+  /// native materials, the dark one's taken below a [bodyShade].
   ///
   /// Unlike [edgeAbsorption], which darkens the whole bevel, this touches
   /// only the outermost pixels. The line is subtracted from the colour
@@ -692,6 +697,24 @@ class LiquidGlassSettings {
 
   /// The effective rim light taking visibility into account.
   double get effectiveRimLight => rimLight * visibility;
+
+  /// How far a bright backdrop is pulled down under the glass, 0 to 1.
+  ///
+  /// The native dark material does not lift a backdrop the way its tint
+  /// alone would: over mid-grey and above it reads darker than the
+  /// backdrop, and a white page comes out at about 184/255. Each pixel is
+  /// scaled by `1 - bodyShade * luma²`, so dark content is barely touched and
+  /// white loses [bodyShade] of itself. `0.28` matches the dark material.
+  ///
+  /// It takes the [rimShade] outline with it, which then sits its fixed step
+  /// below the darkened backdrop: that is the dark outline the native
+  /// control keeps over a white page.
+  ///
+  /// Only affects the Premium (Impeller) path. Defaults to `0.0`, off.
+  final double bodyShade;
+
+  /// The effective body shade taking visibility into account.
+  double get effectiveBodyShade => bodyShade * visibility;
 
   /// How the bevel bends the backdrop. See [GlassLensModel].
   ///
@@ -742,6 +765,7 @@ class LiquidGlassSettings {
         rimShade: rimShade,
         rimShadeEnds: rimShadeEnds,
         rimLight: rimLight,
+        bodyShade: bodyShade,
         lensModel: lensModel,
         backerColor: backerColor,
         platformViewFallbackColor: platformViewFallbackColor,
@@ -860,6 +884,7 @@ class LiquidGlassSettings {
         rimShade: lerpDouble(a.rimShade, b.rimShade, t)!,
         rimShadeEnds: lerpDouble(a.rimShadeEnds, b.rimShadeEnds, t)!,
         rimLight: lerpDouble(a.rimLight, b.rimLight, t)!,
+        bodyShade: lerpDouble(a.bodyShade, b.bodyShade, t)!,
         lensModel: t < 0.5 ? a.lensModel : b.lensModel,
         // Lerp the color so the backer fades smoothly (from/to transparent when
         // one side is null), rather than popping at the midpoint.
@@ -914,6 +939,7 @@ class LiquidGlassSettings {
     double? rimShade,
     double? rimShadeEnds,
     double? rimLight,
+    double? bodyShade,
     GlassLensModel? lensModel,
     Color? backerColor,
     Color? platformViewFallbackColor,
@@ -950,6 +976,7 @@ class LiquidGlassSettings {
         rimShade: rimShade ?? this.rimShade,
         rimShadeEnds: rimShadeEnds ?? this.rimShadeEnds,
         rimLight: rimLight ?? this.rimLight,
+        bodyShade: bodyShade ?? this.bodyShade,
         lensModel: lensModel ?? this.lensModel,
         backerColor: backerColor ?? this.backerColor,
         platformViewFallbackColor:
@@ -992,6 +1019,7 @@ class LiquidGlassSettings {
         other.rimShade == rimShade &&
         other.rimShadeEnds == rimShadeEnds &&
         other.rimLight == rimLight &&
+        other.bodyShade == bodyShade &&
         other.lensModel == lensModel &&
         other.backerColor == backerColor &&
         other.platformViewFallbackColor == platformViewFallbackColor &&
@@ -1030,6 +1058,7 @@ class LiquidGlassSettings {
         rimShade,
         rimShadeEnds,
         rimLight,
+        bodyShade,
         lensModel,
         backerColor,
         platformViewFallbackColor,

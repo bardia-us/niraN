@@ -3,9 +3,92 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:niran/core/registration/device_registration.dart';
+import 'package:niran/platform/windows/windows_device_registration.dart';
+import 'package:niran/platform/windows/windows_native_host.dart';
 import 'package:niran/platform/windows/windows_remote_access.dart';
 
 void main() {
+  // Re-reading publisher identity before status/subscription would block this
+  // fixture. The real service must still send the runtime version and token.
+  test(
+    'credentialed access refresh reads version without device identity',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('niran-version-only-');
+      addTearDown(() => dir.delete(recursive: true));
+      final transport = _RegistryTransport();
+      final registered = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(),
+        dataProtector: const _TestDataProtector(),
+        transport: transport,
+        dataDirectory: dir,
+      );
+      await registered.accept();
+      final host = _VersionOnlyHost();
+      final reopened = WindowsRemoteAccessService(
+        infoProvider: WindowsDeviceRegistrationInfoProvider(host: host),
+        dataProtector: const _TestDataProtector(),
+        transport: transport,
+        dataDirectory: dir,
+      );
+      expect(await reopened.initialize(), isTrue);
+      await reopened.requireAllowed();
+      expect(transport.payloads.last['action'], 'status');
+      expect(transport.payloads.last['app_version'], '0.3.9+13');
+      expect(transport.tokens.last, _RegistryTransport.token);
+      await reopened.fetchSubscription();
+      expect(transport.payloads.last['action'], 'subscription');
+      expect(transport.payloads.last['app_version'], '0.3.9+13');
+      expect(transport.tokens.last, _RegistryTransport.token);
+      transport.updateRequired = true;
+      await expectLater(
+        reopened.requireAllowed(),
+        throwsA(isA<DeviceAccessException>()),
+      );
+      expect(reopened.hasCachedAllowedAccess, isFalse);
+    },
+  );
+  test(
+    'known mandatory update remains gated across offline relaunch',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('niran-outdated-gate-');
+      addTearDown(() => dir.delete(recursive: true));
+      final transport = _RegistryTransport();
+      final service = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(),
+        dataProtector: const _TestDataProtector(),
+        transport: transport,
+        dataDirectory: dir,
+      );
+      await service.accept();
+      expect(service.hasCachedAllowedAccess, isTrue);
+      transport.updateRequired = true;
+      await expectLater(
+        service.requireAllowed(),
+        throwsA(isA<DeviceAccessException>()),
+      );
+      expect(service.hasCachedAllowedAccess, isFalse);
+      final reopened = WindowsRemoteAccessService(
+        infoProvider: const _InfoProvider(),
+        dataProtector: const _TestDataProtector(),
+        transport: transport,
+        dataDirectory: dir,
+      );
+      await expectLater(
+        reopened.initialize(),
+        throwsA(
+          isA<DeviceAccessException>().having(
+            (error) => error.reason,
+            'reason',
+            'update_required',
+          ),
+        ),
+      );
+      transport.updateRequired = false;
+      await reopened.requireAllowed();
+      expect(await reopened.initialize(), isTrue);
+      expect(reopened.hasCachedAllowedAccess, isTrue);
+    },
+  );
   test('publisher system id is one-way and stable across reinstall', () async {
     final firstDirectory = await Directory.systemTemp.createTemp(
       'niran-access-a-',
@@ -188,6 +271,24 @@ final class _TestDataProtector implements WindowsDataProtector {
   @override
   Future<String> unprotect(String value) async =>
       utf8.decode(base64Decode(value));
+}
+
+final class _VersionOnlyHost implements WindowsNativeHostApi {
+  @override
+  Future<Map<dynamic, dynamic>> getBuildConfig() async => {
+    'appVersion': '0.3.9+13',
+    'telegramUrl': '',
+    'telegramContact': '',
+    'expectedCoreVersion': 'v26.7.28',
+    'expectedSingBoxVersion': '1.14.0',
+  };
+
+  @override
+  Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo() async =>
+      throw StateError('Publisher identity is unavailable during status');
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 final class _InfoProvider implements DeviceRegistrationInfoProvider {

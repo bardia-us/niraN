@@ -22,9 +22,11 @@ void main() {
         'homeLayout': encoded,
         'soundStyle': 'classic',
         'soundEffects': false,
+        'navigationPosition': 'bottom',
       });
       expect(updated['homeLayout'], encoded);
       expect(updated['soundStyle'], 'classic');
+      expect(updated['navigationPosition'], 'bottom');
       expect(updated['soundEffects'], isFalse);
       expect(updated['localSocksPort'], 12345);
       expect(updated['themeMode'], 'dark');
@@ -33,6 +35,7 @@ void main() {
       final settings = (await restored.initialize())['settings'] as Map;
       expect(settings['homeLayout'], encoded);
       expect(settings['soundStyle'], 'classic');
+      expect(settings['navigationPosition'], 'bottom');
       expect(settings['soundEffects'], isFalse);
       await backend.disconnect();
       await restored.disconnect();

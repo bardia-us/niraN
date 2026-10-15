@@ -4,30 +4,36 @@ import 'glass_surface.dart';
 import 'animated_popup_surface.dart';
 import 'snapshot_glass_route.dart';
 import 'live_liquid_glass.dart';
+import '../render_mode.dart';
 
 Future<T?> showNirangDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool barrierDismissible = true,
-}) => showSnapshotGlassRoute<T>(
-  context: context,
-  useLiveBackdrop: liveGlassReady,
-  barrierDismissible: barrierDismissible,
-  captureRegion: Rect.fromCenter(
-    center: MediaQuery.sizeOf(context).center(Offset.zero),
-    width: 656,
-    height: MediaQuery.sizeOf(context).height * .78 + 96,
-  ),
-  transitionDuration: MediaQuery.disableAnimationsOf(context)
-      ? Duration.zero
-      : const Duration(milliseconds: 140),
-  pageBuilder: (routeContext, _, _) => builder(routeContext),
-  // A BackdropFilter inside FadeTransition is rendered through an opacity
-  // save-layer, which can expose the unfiltered backdrop on Windows. Keep the
-  // glass fully painted from frame one and animate geometry only.
-  transitionBuilder: (_, animation, _, child) =>
-      AnimatedPopupSurface(animation: animation, child: child),
-);
+}) {
+  final reduced = lightweightRenderingOf(context);
+  return showSnapshotGlassRoute<T>(
+    context: context,
+    useLiveBackdrop: !reduced && liveGlassReady,
+    captureBackdrop: !reduced,
+    barrierDismissible: barrierDismissible,
+    captureRegion: Rect.fromCenter(
+      center: MediaQuery.sizeOf(context).center(Offset.zero),
+      width: 656,
+      height: MediaQuery.sizeOf(context).height * .78 + 96,
+    ),
+    transitionDuration: MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 240),
+    pageBuilder: (routeContext, _, _) => builder(routeContext),
+    // A BackdropFilter inside FadeTransition is rendered through an opacity
+    // save-layer, which can expose the unfiltered backdrop on Windows. Keep the
+    // glass fully painted from frame one and animate geometry only.
+    transitionBuilder: (_, animation, _, child) => reduced
+        ? FadeTransition(opacity: animation, child: child)
+        : AnimatedPopupSurface(animation: animation, child: child),
+  );
+}
 
 class NirangAlertDialog extends StatelessWidget {
   const NirangAlertDialog({
@@ -56,7 +62,7 @@ class NirangAlertDialog extends StatelessWidget {
       insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
       child: GlassSurface(
         radius: 22,
-        blur: liveGlassReady ? messagesLiquidBlur : 16,
+        blur: liveGlassReady ? messagesLiquidBlur : 18,
         saturation: liveGlassReady ? messagesLiquidSaturation : 1.20,
         liveLiquid: true,
         child: ConstrainedBox(

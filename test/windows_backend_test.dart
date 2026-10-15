@@ -12,8 +12,206 @@ import 'package:niran/platform/windows/windows_subscription_parser.dart';
 import 'package:niran/platform/windows/windows_xray_config_builder.dart';
 import 'package:niran/core/registration/device_registration.dart';
 import 'package:niran/platform/windows/windows_auto_start.dart';
+import 'package:niran/platform/windows/windows_traffic.dart';
 
 void main() {
+  test(
+    'automatic startup waits for usable UI while cached bootstrap returns',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-ui-ready-',
+      );
+      final ready = Completer<void>();
+      final access = _DelayedRemoteAccess();
+      final backend = WindowsPlatformBackend(
+        host: _FakeWindowsHost(),
+        dataDirectory: directory,
+        remoteAccess: access,
+        autoStartCore: false,
+        startupReady: ready.future,
+      );
+      try {
+        final snapshot = await backend.initialize().timeout(
+          const Duration(seconds: 1),
+        );
+        expect(snapshot['connection'], containsPair('state', 'disconnected'));
+        await Future<void>.delayed(Duration.zero);
+        expect(access.started, isFalse);
+        ready.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(access.started, isTrue);
+      } finally {
+        access.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+  test(
+    'restart failure after disconnect never resumes stale traffic',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-restart-race-',
+      );
+      final host = _FakeWindowsHost();
+      final backend = WindowsPlatformBackend(
+        host: host,
+        dataDirectory: directory,
+        autoStartCore: false,
+        remoteAccess: _AllowedRemoteAccess(),
+        proxyReadinessProbe: (_) async {},
+        localPortPreflight: (_) async {},
+        trafficCounterQuery: () async => const TrafficCounters(100, 100),
+      );
+      try {
+        await _seedConnectableServer(directory);
+        final state = await backend.initialize();
+        await backend.connect('${(state['servers'] as List).first['id']}');
+        final pending = Completer<String>();
+        host.pendingProtection = pending;
+        host.protectionStarted = Completer<void>();
+        final failed = expectLater(
+          backend.restartApplication(),
+          throwsA(anything),
+        );
+        await host.protectionStarted!.future;
+        await backend.disconnect();
+        pending.completeError(StateError('secure write failed'));
+        await failed;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        final snapshot = await backend.initialize();
+        expect((snapshot['connection'] as Map)['state'], 'disconnected');
+        expect((snapshot['traffic'] as Map)['available'], false);
+      } finally {
+        await backend.disconnect();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+  for (final storageFailure in [false, true]) {
+    test(
+      'failed application restart preserves live traffic: storage=$storageFailure',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'niran-restart-',
+        );
+        final host = _FakeWindowsHost();
+        var counter = 0;
+        final backend = WindowsPlatformBackend(
+          host: host,
+          dataDirectory: directory,
+          autoStartCore: false,
+          remoteAccess: _AllowedRemoteAccess(),
+          proxyReadinessProbe: (_) async {},
+          localPortPreflight: (_) async {},
+          trafficCounterQuery: () async =>
+              TrafficCounters(counter += 100, counter),
+        );
+        try {
+          await _seedConnectableServer(directory);
+          final state = await backend.initialize();
+          await backend.connect('${(state['servers'] as List).first['id']}');
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          host.failProtection = storageFailure;
+          host.failRestart = !storageFailure;
+          await expectLater(backend.restartApplication(), throwsA(anything));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          final snapshot = await backend.initialize();
+          expect((snapshot['connection'] as Map)['state'], 'connected');
+          expect((snapshot['traffic'] as Map)['available'], true);
+        } finally {
+          host.failProtection = false;
+          await backend.disconnect();
+          await directory.delete(recursive: true);
+        }
+      },
+    );
+  }
+  test('failed state commit preserves fingerprint after reopening', () async {
+    final directory = await Directory.systemTemp.createTemp('niran-fp-reopen-');
+    final backend = WindowsPlatformBackend(
+      remoteAccess: _SourceOrderRemote(),
+      autoStartCore: false,
+      host: _FakeWindowsHost(),
+      dataDirectory: directory,
+    );
+    final reopened = WindowsPlatformBackend(
+      remoteAccess: _SourceOrderRemote(),
+      autoStartCore: false,
+      host: _FakeWindowsHost(),
+      dataDirectory: directory,
+    );
+    try {
+      await backend.initialize();
+      final servers = (await backend.refreshSubscription())['servers'] as List;
+      final id = '${servers.first['id']}';
+      await backend.updateServerProfile(id, {'fp': 'firefox'});
+      final blocked = Directory('${directory.path}/state.json.tmp');
+      await blocked.create();
+      await expectLater(
+        backend.refreshSubscription(),
+        throwsA(isA<FileSystemException>()),
+      );
+      await blocked.delete();
+      await reopened.initialize();
+      expect(
+        Uri.parse(
+          await reopened.exportServerShareLink(id),
+        ).queryParameters['fp'],
+        'firefox',
+      );
+    } finally {
+      await backend.disconnect();
+      await reopened.disconnect();
+      await directory.delete(recursive: true);
+    }
+  });
+  test(
+    'successful refresh restores source fingerprint but preserves other TLS edits',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niran-refresh-fp-',
+      );
+      final remote = _SourceOrderRemote();
+      final backend = WindowsPlatformBackend(
+        remoteAccess: remote,
+        autoStartCore: false,
+        host: _FakeWindowsHost(),
+        dataDirectory: directory,
+      );
+      try {
+        await backend.initialize();
+        final servers =
+            (await backend.refreshSubscription())['servers'] as List;
+        final id = '${servers.first['id']}';
+        await backend.updateServerProfile(id, {
+          'fp': 'firefox',
+          'sni': 'edited.example',
+        });
+        remote.fail = true;
+        await expectLater(
+          backend.refreshSubscription(),
+          throwsA(isA<HttpException>()),
+        );
+        expect(
+          Uri.parse(
+            await backend.exportServerShareLink(id),
+          ).queryParameters['fp'],
+          'firefox',
+        );
+        remote.fail = false;
+        await backend.refreshSubscription();
+        final restored = Uri.parse(
+          await backend.exportServerShareLink(id),
+        ).queryParameters;
+        expect(restored['fp'], isNot('firefox'));
+        expect(restored['sni'], 'edited.example');
+      } finally {
+        await backend.disconnect();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
   test(
     'refresh rollback cannot undo a reorder queued during secure storage',
     () async {
@@ -416,9 +614,11 @@ void main() {
         });
         expect(autoStart.values, [true, false]);
         expect(disabled['startWithWindows'], isFalse);
-        final persisted = jsonDecode(
-          await File('${directory.path}\\state.json').readAsString(),
-        ) as Map;
+        final persisted =
+            jsonDecode(
+                  await File('${directory.path}\\state.json').readAsString(),
+                )
+                as Map;
         expect((persisted['settings'] as Map)['startWithWindows'], isFalse);
       } finally {
         await directory.delete(recursive: true);
@@ -585,9 +785,9 @@ void main() {
         'allowInsecure': '1',
       },
     );
-    final config = jsonDecode(
-      builder.build(server: server, settings: _settings()),
-    ) as Map<String, dynamic>;
+    final config =
+        jsonDecode(builder.build(server: server, settings: _settings()))
+            as Map<String, dynamic>;
     final stream =
         (config['outbounds'] as List).first['streamSettings']
             as Map<String, dynamic>;
@@ -638,19 +838,21 @@ void main() {
       security: 'tls',
       parameters: const {'host': 'example.com'},
     );
-    final json = jsonDecode(
-      builder.build(
-        server: server,
-        settings: {
-          ..._settings(),
-          'fragmentEnabled': true,
-          'fragmentPackets': 'tlshello',
-          'fragmentLength': '10-20',
-          'fragmentInterval': '0-5',
-          'fragmentMaxSplit': '2-4',
-        },
-      ),
-    ) as Map;
+    final json =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'fragmentEnabled': true,
+                  'fragmentPackets': 'tlshello',
+                  'fragmentLength': '10-20',
+                  'fragmentInterval': '0-5',
+                  'fragmentMaxSplit': '2-4',
+                },
+              ),
+            )
+            as Map;
     final outbounds = (json['outbounds'] as List).cast<Map>();
     final proxy = outbounds.firstWhere((item) => item['tag'] == 'proxy');
     final fragment = outbounds.firstWhere((item) => item['tag'] == 'fragment');
@@ -685,9 +887,9 @@ void main() {
       },
     );
 
-    final config = jsonDecode(
-      builder.build(server: server, settings: _settings()),
-    ) as Map<String, dynamic>;
+    final config =
+        jsonDecode(builder.build(server: server, settings: _settings()))
+            as Map<String, dynamic>;
     final inbounds = config['inbounds'] as List<dynamic>;
 
     expect(
@@ -712,12 +914,14 @@ void main() {
       security: 'tls',
       parameters: const {'sni': 'example.com'},
     );
-    final config = jsonDecode(
-      builder.build(
-        server: server,
-        settings: {..._settings(), 'tunEnabled': true},
-      ),
-    ) as Map<String, dynamic>;
+    final config =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {..._settings(), 'tunEnabled': true},
+              ),
+            )
+            as Map<String, dynamic>;
     final inbounds = config['inbounds'] as List<dynamic>;
     expect(inbounds, hasLength(3));
     final tun = inbounds.singleWhere((item) => item['protocol'] == 'tun');
@@ -742,13 +946,19 @@ void main() {
       security: 'tls',
       parameters: const {'sni': 'example.com'},
     );
-    Map build(String mode) => jsonDecode(
-      builder.build(
-        server: server,
-        settings: {..._settings(), 'tunEnabled': true, 'routingMode': mode},
-        iranCidrs: const ['2.144.0.0/14'],
-      ),
-    ) as Map;
+    Map build(String mode) =>
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': mode,
+                },
+                iranCidrs: const ['2.144.0.0/14'],
+              ),
+            )
+            as Map;
 
     final global = build('global');
     final globalRules = (global['routing']['rules'] as List).whereType<Map>();
@@ -786,18 +996,20 @@ void main() {
       reason: 'Bypass Iran must respect the user routeOnly setting',
     );
 
-    final bypassWithRouteOnly = jsonDecode(
-      builder.build(
-        server: server,
-        settings: {
-          ..._settings(),
-          'tunEnabled': true,
-          'routingMode': 'bypassIran',
-          'routeOnly': true,
-        },
-        iranCidrs: const ['2.144.0.0/14'],
-      ),
-    ) as Map;
+    final bypassWithRouteOnly =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': 'bypassIran',
+                  'routeOnly': true,
+                },
+                iranCidrs: const ['2.144.0.0/14'],
+              ),
+            )
+            as Map;
     expect(
       (bypassWithRouteOnly['inbounds'] as List).every(
         (inbound) => inbound['sniffing']['routeOnly'] == true,
@@ -805,18 +1017,20 @@ void main() {
       isTrue,
     );
 
-    final custom = jsonDecode(
-      builder.build(
-        server: server,
-        settings: {
-          ..._settings(),
-          'tunEnabled': true,
-          'routingMode': 'custom',
-          'customDomains': 'domain:example.org',
-          'customIps': '203.0.113.0/24',
-        },
-      ),
-    ) as Map;
+    final custom =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'routingMode': 'custom',
+                  'customDomains': 'domain:example.org',
+                  'customIps': '203.0.113.0/24',
+                },
+              ),
+            )
+            as Map;
     final customRules = (custom['routing']['rules'] as List)
         .whereType<Map>()
         .where((rule) => rule['outboundTag'] == 'direct')
@@ -854,12 +1068,18 @@ void main() {
       security: 'tls',
       parameters: const {'sni': 'example.com'},
     );
-    final config = jsonDecode(
-      builder.build(
-        server: server,
-        settings: {..._settings(), 'tunEnabled': true, 'enableUdp': false},
-      ),
-    ) as Map<String, dynamic>;
+    final config =
+        jsonDecode(
+              builder.build(
+                server: server,
+                settings: {
+                  ..._settings(),
+                  'tunEnabled': true,
+                  'enableUdp': false,
+                },
+              ),
+            )
+            as Map<String, dynamic>;
     final inbounds = config['inbounds'] as List<dynamic>;
     final socks = inbounds.singleWhere((item) => item['protocol'] == 'socks');
     final tun = inbounds.singleWhere((item) => item['protocol'] == 'tun');
@@ -898,14 +1118,16 @@ void main() {
         ),
       ];
 
-      final config = jsonDecode(
-        builder.buildSpeedtest(
-          servers: servers,
-          settings: _settings(),
-          socksPorts: const [21001, 21002],
-          httpPorts: const [22001, 22002],
-        ),
-      ) as Map<String, dynamic>;
+      final config =
+          jsonDecode(
+                builder.buildSpeedtest(
+                  servers: servers,
+                  settings: _settings(),
+                  socksPorts: const [21001, 21002],
+                  httpPorts: const [22001, 22002],
+                ),
+              )
+              as Map<String, dynamic>;
       final inbounds = config['inbounds'] as List<dynamic>;
       final outbounds = config['outbounds'] as List<dynamic>;
       final rules =
@@ -1110,8 +1332,9 @@ void main() {
           'niraN-dns-migration-',
         );
         addTearDown(() => directory.delete(recursive: true));
-        await File('${directory.path}\\state.json')
-            .writeAsString(jsonEncode({'settings': settings}));
+        await File(
+          '${directory.path}\\state.json',
+        ).writeAsString(jsonEncode({'settings': settings}));
         final backend = WindowsPlatformBackend(
           remoteAccess: _AllowedRemoteAccess(),
           autoStartCore: false,
@@ -1168,8 +1391,9 @@ void main() {
           'niraN-quic-migration-',
         );
         addTearDown(() => directory.delete(recursive: true));
-        await File('${directory.path}\\state.json')
-            .writeAsString(jsonEncode({'settings': settings}));
+        await File(
+          '${directory.path}\\state.json',
+        ).writeAsString(jsonEncode({'settings': settings}));
         final backend = WindowsPlatformBackend(
           remoteAccess: _AllowedRemoteAccess(),
           autoStartCore: false,
@@ -1485,49 +1709,55 @@ void main() {
     },
   );
 
-  test('mandatory update discovered during refresh stops Core and emits update gate', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'niraN-update-refresh-test-',
-    );
-    final host = _FakeWindowsHost();
-    final access = _AllowedRemoteAccess();
-    final events = <Map<dynamic, dynamic>>[];
-    try {
-      await _seedConnectableServer(directory);
-      final backend = WindowsPlatformBackend(
-        remoteAccess: access,
-        autoStartCore: false,
-        localPortPreflight: (_) async {},
-        host: host,
-        dataDirectory: directory,
-        proxyReadinessProbe: (_) async {},
+  test(
+    'mandatory update discovered during refresh stops Core and emits update gate',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'niraN-update-refresh-test-',
       );
-      await backend.initialize();
-      final subscription = backend.events.listen(events.add);
-      addTearDown(subscription.cancel);
-      await backend.connect('server');
-      host.calls.clear();
-      access.failure = const DeviceAccessException(
-        'update_required',
-        'niraN must be updated to 0.3.7 or newer',
-      );
+      final host = _FakeWindowsHost();
+      final access = _AllowedRemoteAccess();
+      final events = <Map<dynamic, dynamic>>[];
+      try {
+        await _seedConnectableServer(directory);
+        final backend = WindowsPlatformBackend(
+          remoteAccess: access,
+          autoStartCore: false,
+          localPortPreflight: (_) async {},
+          host: host,
+          dataDirectory: directory,
+          proxyReadinessProbe: (_) async {},
+        );
+        await backend.initialize();
+        final subscription = backend.events.listen(events.add);
+        addTearDown(subscription.cancel);
+        await backend.connect('server');
+        host.calls.clear();
+        access.failure = const DeviceAccessException(
+          'update_required',
+          'niraN must be updated to 0.3.7 or newer',
+        );
 
-      await expectLater(
-        backend.refreshSubscription(),
-        throwsA(
-          isA<DeviceAccessException>().having(
-            (error) => error.reason,
-            'reason',
-            'update_required',
+        await expectLater(
+          backend.refreshSubscription(),
+          throwsA(
+            isA<DeviceAccessException>().having(
+              (error) => error.reason,
+              'reason',
+              'update_required',
+            ),
           ),
-        ),
-      );
-      expect(host.calls, containsAllInOrder(['disable', 'stop']));
-      expect(events.any((event) => event['type'] == 'updateRequired'), isTrue);
-    } finally {
-      await directory.delete(recursive: true);
-    }
-  });
+        );
+        expect(host.calls, containsAllInOrder(['disable', 'stop']));
+        expect(
+          events.any((event) => event['type'] == 'updateRequired'),
+          isTrue,
+        );
+      } finally {
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 
   test('Windows TUN lifecycle never changes System Proxy', () async {
     final directory = await Directory.systemTemp.createTemp(
@@ -2038,7 +2268,8 @@ void main() {
               'alpn': 'http/1.1',
               'fp': 'unsafe',
               'cs': 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384',
-              'fm': '{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","length":"1-1","delay":"1-2"}}]}',
+              'fm':
+                  '{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","length":"1-1","delay":"1-2"}}]}',
             },
           ),
           settings: {
@@ -2167,7 +2398,14 @@ Future<void> _seedConnectableServer(Directory directory) async {
   );
 }
 
-final class _FakeWindowsHost implements WindowsNativeHostApi {
+final class _FakeWindowsHost
+    implements WindowsNativeHostApi, WindowsRestartHostApi {
+  bool failRestart = false;
+  @override
+  Future<void> restartApplication() async {
+    if (failRestart) throw PlatformException(code: 'restart_failed');
+  }
+
   bool failProtection = false;
   Completer<String>? pendingProtection;
   Completer<void>? protectionStarted;

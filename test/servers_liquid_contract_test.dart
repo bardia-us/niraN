@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as glass;
 import 'package:niran/core/widgets/glass_surface.dart';
+import 'package:niran/core/widgets/live_liquid_glass.dart';
 import 'package:niran/features/vpn/app_controller.dart';
 import 'package:niran/main.dart';
 import 'home_canvas_test.dart' show CanvasController;
@@ -38,7 +39,7 @@ void main() {
       expect(tester.widget<GlassSurface>(button).liveLiquid, isTrue);
       // Real consumers must forward the midpoint recipe, not just opt into a
       // renderer whose isolated unit test happened to receive the right values.
-      expect(tester.widget<GlassSurface>(header).blur, 2.4);
+      expect(tester.widget<GlassSurface>(header).blur, messagesLiquidBlur);
       expect(
         find.descendant(
           of: find.byKey(const Key('servers-menu-button')),

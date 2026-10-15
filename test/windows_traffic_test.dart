@@ -10,6 +10,76 @@ import 'dart:convert';
 
 void main() {
   test(
+    'calendar month sums configs, survives restart and rolls with year',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('niran-month-');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/ledger.json');
+      final ledger = WindowsTrafficLedger(file: file);
+      final first = DateTime(2026, 12, 1);
+      var token = ledger.beginSession('a', first);
+      ledger.record(token, const TrafficCounters(10, 100), first);
+      final later = DateTime(2026, 12, 20);
+      token = ledger.beginSession('b', later);
+      ledger.record(token, const TrafficCounters(20, 200), later);
+      await ledger.flush();
+      final restored = WindowsTrafficLedger(file: file);
+      await restored.load();
+      final value = restored.snapshot('a', later);
+      expect(value.aggregateMonthUpload, 30);
+      expect(value.aggregateMonthDownload, 300);
+      expect(value.aggregateTodayDownload, 200);
+      expect(value.lifetimeDownload, 100);
+      expect(
+        restored.snapshot('a', DateTime(2027, 1, 1)).aggregateMonthDownload,
+        0,
+      );
+      expect(TrafficUsage.fromMap(value.toMap()).aggregateMonthDownload, 300);
+    },
+  );
+  test('legacy ledger never mislabels lifetime bytes as this month', () async {
+    final dir = await Directory.systemTemp.createTemp('niran-month-legacy-');
+    addTearDown(() => dir.delete(recursive: true));
+    final file = File('${dir.path}/ledger.json');
+    await file.writeAsString(
+      jsonEncode({
+        'version': 1,
+        'configs': {
+          'a': {
+            'upload': 1000,
+            'download': 9000,
+            'todayUpload': 100,
+            'todayDownload': 500,
+            'day': '2026-10-11',
+          },
+        },
+      }),
+    );
+    final ledger = WindowsTrafficLedger(file: file);
+    await ledger.load();
+    final at = DateTime(2026, 10, 11);
+    expect(ledger.snapshot('a', at).aggregateMonthDownload, isNull);
+    final token = ledger.beginSession('a', at);
+    ledger.record(token, const TrafficCounters(10, 20), at);
+    expect(ledger.snapshot('a', at).aggregateMonthDownload, 20);
+    expect(ledger.snapshot('a', at).lifetimeDownload, 9020);
+  });
+  test(
+    'unobserved month boundary is unknown rather than assigned to new month',
+    () {
+      final ledger = WindowsTrafficLedger();
+      final before = DateTime(2026, 10, 31, 23);
+      final after = DateTime(2026, 11, 1, 1);
+      final token = ledger.beginSession('a', before);
+      ledger.record(token, const TrafficCounters(10, 20), before);
+      ledger.unavailable('counterUnavailable');
+      expect(ledger.snapshot('a', after).aggregateMonthDownload, isNull);
+      ledger.record(token, const TrafficCounters(100, 200), after);
+      expect(ledger.snapshot('a', after).aggregateMonthDownload, isNull);
+      expect(ledger.snapshot('a', after).lifetimeDownload, 200);
+    },
+  );
+  test(
     'first observation after midnight preserves unknown day across restart',
     () async {
       final dir = await Directory.systemTemp.createTemp('niran-unknown-day-');

@@ -19,6 +19,23 @@ class AppStrings {
 
   static const _values = <String, Map<String, String>>{
     'en': {
+      'performanceRecovery': 'Performance & recovery',
+      'performanceLightSummary':
+          'Lightweight buttons, with subtle header blur only. Requires restart.',
+      'performanceDetails':
+          'Disables glass lenses, menu/card blur, refraction, snapshot capture and graphics preparation. Keeps button feedback, short page motion and a subtle blur only on the upper header. Layout, scrolling and connection features stay intact. Changing this mode restarts niraN and interrupts the current connection; it does not restart Windows.',
+      'performanceEnableConfirm':
+          'Enable lightweight rendering and restart niraN? Heavy glass effects will be disabled; button feedback and subtle header blur stay. The current connection will be interrupted.',
+      'performanceDisableConfirm':
+          'Restore full visual effects and restart niraN? The current connection will be interrupted.',
+      'performanceRestartPending':
+          'Saved for the next launch. Restart niraN to apply.',
+      'applyRestart': 'Apply & restart',
+      'navigationPlacement': 'Navigation position',
+      'navigationleft': 'Left',
+      'navigationright': 'Right',
+      'navigationtop': 'Top',
+      'navigationbottom': 'Bottom',
       'subscriptionUpdated': 'Subscription updated',
       'homeCanvasHint': 'Drag cards to move. Pull a corner to resize.',
       'autoScrollOn': 'Auto-scroll on',
@@ -32,7 +49,8 @@ class AppStrings {
       'classicSound': 'Classic niraN',
       'previewSound': 'Preview sound',
       'customizeHome': 'Customize Home',
-      'homeSlotsHint': 'Drag the moving items into their allowed slots. Connection details stay fixed.',
+      'homeSlotsHint':
+          'Drag the moving items into their allowed slots. Connection details stay fixed.',
       'usageColumn': 'Usage column',
       'connectionControlOrder': 'Connection controls',
       'left': 'Left',
@@ -46,22 +64,33 @@ class AppStrings {
       'configToday': 'This config · Today',
       'configTrackedTotal': 'This config · Tracked',
       'allConfigsToday': 'All configs · Today',
+      'allConfigsMonth': 'All configs · This month',
+      'trafficMonthHint':
+          'Measured proxy traffic in the current calendar month, since monthly tracking began. Earlier unrecorded traffic is not estimated.',
       'trafficMidnightHint': 'Today resets at local midnight.',
       'trafficUnavailableHint': 'Live counters unavailable for this core.',
       'trafficIdleHint':
           'Saved totals remain; live rates resume on connection.',
       'trafficDayUnknownHint':
           'A counter gap across midnight prevents an exact daily total.',
-      'trafficScopeHint': 'Measured niraN proxy traffic since tracking began. Not all Windows internet traffic; historic consumption cannot be recovered.',
-      'realityProfileHint': 'Reality supports fingerprint changes here. TLS cipher suites and FinalMask are unavailable; Reality keys stay unchanged.',
+      'trafficScopeHint':
+          'Measured niraN proxy traffic since tracking began. Not all Windows internet traffic; historic consumption cannot be recovered.',
+      'realityProfileHint':
+          'Reality supports fingerprint changes here. TLS cipher suites and FinalMask are unavailable; Reality keys stay unchanged.',
       'realityFingerprintUnsupported':
           'The unsafe fingerprint is available only for TLS, not Reality.',
-      'darkStyleLightHint': 'Available in Dark mode. Your dark canvas is saved for when Dark mode is active.',
+      'darkStyleLightHint':
+          'Available in Dark mode. Your dark canvas is saved for when Dark mode is active.',
       'proxyCore': 'Proxy core',
       'xrayCoreHint': 'Default core. Independent of TUN mode.',
-      'singBoxCoreHint': 'Use sing-box for compatible profiles. XHTTP and Xray-only options are not supported. TUN remains a separate setting.',
-      'localBypass': 'Local network · Always bypassed',
-      'localBypassHint': 'Loopback, LAN and local names always connect directly, in Proxy and TUN modes.',
+      'singBoxCoreHint':
+          'Use sing-box for compatible profiles. XHTTP and Xray-only options are not supported. TUN remains a separate setting.',
+      'localBypass': 'Local network / localhost',
+      'localBypassHint':
+          'Choose how private addresses and local names are routed.',
+      'localauto': 'Automatic (direct local access)',
+      'localbypass': 'Bypass proxy',
+      'localproxy': 'Use proxy',
       'customBypass': 'Additional bypass rules',
       'home': 'Home',
       'connectionOverview': 'Your connection, network modes and live status',
@@ -99,7 +128,8 @@ class AppStrings {
       'refresh': 'Update now',
       'updateSubscription': 'Update Subscription',
       'notConfigured': 'Subscription endpoint is not configured.',
-      'configureHint': 'Set NIRANG_SUBSCRIPTION_URL in android/gradle.properties or the build environment.',
+      'configureHint':
+          'Set NIRANG_SUBSCRIPTION_URL in android/gradle.properties or the build environment.',
       'testAll': 'Test all',
       'sortByTestResults': 'Sort by test results',
       'testRealDelays': 'Test real delays',
@@ -128,13 +158,15 @@ class AppStrings {
       'port': 'Port',
       'generalInformation': 'General information',
       'protectedCredentials': 'Protected credentials',
-      'credentialsProtected': 'Sensitive values are intentionally masked and cannot be copied or changed.',
+      'credentialsProtected':
+          'Sensitive values are intentionally masked and cannot be copied or changed.',
       'password': 'Password',
       'realityPublicKey': 'Reality public key',
       'shortId': 'Short ID',
       'delete': 'Delete',
       'deleteServer': 'Delete server?',
-      'deleteServerBody': 'This server will be hidden locally until the next successful subscription update.',
+      'deleteServerBody':
+          'This server will be hidden locally until the next successful subscription update.',
       'restoreDeletedServers': 'Restore deleted servers',
       'noDeletedServers': 'No locally deleted servers',
       'deletedServersCount': 'locally deleted server(s)',
@@ -159,7 +191,8 @@ class AppStrings {
       'light': 'Light',
       'dark': 'Dark',
       'performanceMode': 'Performance Mode',
-      'performanceModeSummary': 'Reduce blur and heavy visual effects while keeping lightweight animations.',
+      'performanceModeSummary':
+          'Reduce blur and heavy visual effects while keeping lightweight animations.',
       'language': 'Language',
       'english': 'English',
       'persian': 'فارسی',
@@ -167,7 +200,8 @@ class AppStrings {
       'globalRoutingHint':
           'Send all non-DNS traffic through the selected proxy.',
       'bypassIran': 'Bypass Iran',
-      'bypassIranHint': 'Send .ir domains, Iran IP ranges, LAN and local destinations directly.',
+      'bypassIranHint':
+          'Send .ir domains, Iran IP ranges, LAN and local destinations directly.',
       'custom': 'Custom routing',
       'customRuleHint': 'Listed domains and IP ranges connect directly.',
       'direct': 'Direct',
@@ -182,7 +216,8 @@ class AppStrings {
       'invalidRules': 'The rule text is invalid or too large.',
       'invalidPort': 'Enter distinct ports from 1024 to 65535.',
       'localPortConflict': 'Local proxy port is already in use',
-      'localPortConflictSummary': 'v2rayN or another proxy client may be using the niraN SOCKS/HTTP ports. Close it, retry, or choose different ports.',
+      'localPortConflictSummary':
+          'v2rayN or another proxy client may be using the niraN SOCKS/HTTP ports. Close it, retry, or choose different ports.',
       'changePorts': 'Change Ports',
       'retry': 'Retry',
       'invalidVpnAddress': 'Enter a private IPv4 interface address with CIDR.',
@@ -243,7 +278,8 @@ class AppStrings {
       'sniffingSummary':
           'Detect destination domains from HTTP, TLS and QUIC traffic.',
       'enableRouteOnly': 'Enable routeOnly',
-      'routeOnlySummary': 'Use sniffed domains for local routing without replacing the target address.',
+      'routeOnlySummary':
+          'Use sniffed domains for local routing without replacing the target address.',
       'blockQuic': 'Block QUIC (UDP/443)',
       'blockQuicSummary':
           'Optional compatibility fallback. Disabled by default.',
@@ -307,7 +343,8 @@ class AppStrings {
       'resumeDownload': 'Resume download',
       'installUpdate': 'Install update',
       'openDownloadFolder': 'Open download folder',
-      'performanceModeDialogBody': 'If your device is older or the interface feels slow, Performance Mode can reduce visual effects and animations to improve responsiveness and battery usage.',
+      'performanceModeDialogBody':
+          'If your device is older or the interface feels slow, Performance Mode can reduce visual effects and animations to improve responsiveness and battery usage.',
       'enable': 'Enable',
       'keepFullEffects': 'Keep full effects',
       'hours6': '6 hours',
@@ -317,7 +354,8 @@ class AppStrings {
       'telegram': 'Telegram channel',
       'telegramSubtitle': 'Updates, outages and server news',
       'joinTelegramTitle': 'Stay informed',
-      'joinTelegramBody': 'Join our Telegram channel to receive updates, outages and server news.',
+      'joinTelegramBody':
+          'Join our Telegram channel to receive updates, outages and server news.',
       'joinTelegram': 'Join Telegram',
       'later': 'Later',
       'dontShowAgain': "Don't show again",
@@ -330,7 +368,8 @@ class AppStrings {
       'clearLogsBody': 'This removes locally stored, redacted app events.',
       'operationFailed': 'Operation failed',
       'administratorRequiredTitle': 'Administrator permission required',
-      'administratorRequiredMessage': 'TUN mode requires administrator permission. Please close niraN and run it again using "Run as administrator".',
+      'administratorRequiredMessage':
+          'TUN mode requires administrator permission. Please close niraN and run it again using "Run as administrator".',
       'subscriptionUsageUnknown': 'Usage information unavailable',
       'serverCount': 'server(s)',
       'ipProvider': 'Current connection info test URL',
@@ -346,7 +385,8 @@ class AppStrings {
       'xrayLogLevel': 'Xray log level',
       'sniffingType': 'Sniffing protocols',
       'enableFragment': 'TLS ClientHello fragmentation',
-      'fragmentSummary': 'Route the upstream Xray connection through a Freedom fragment outbound.',
+      'fragmentSummary':
+          'Route the upstream Xray connection through a Freedom fragment outbound.',
       'fragmentParameters': 'Fragment parameters',
       'fragmentPackets': 'Packets',
       'fragmentLength': 'Length range',
@@ -364,13 +404,31 @@ class AppStrings {
       'finalMaskHint': 'Raw Xray FinalMask JSON object',
       'invalidJson': 'Invalid JSON',
       'finalMaskObjectError': 'FinalMask must be a JSON object.',
-      'allowInsecureUnsupported': 'This link requests allowInsecure. Xray 26.7.28 no longer supports it; certificate verification remains enabled.',
+      'allowInsecureUnsupported':
+          'This link requests allowInsecure. Xray 26.7.28 no longer supports it; certificate verification remains enabled.',
       'copyShareLink': 'Copy share link',
       'shareLinkCopied': 'Share link copied',
       'emptyServers':
           'No supported VLESS, VMess or Trojan servers were loaded.',
     },
     'fa': {
+      'performanceRecovery': 'عملکرد و بازیابی',
+      'performanceLightSummary':
+          'دکمه‌های سبک، با بلور کم فقط در هدر بالا؛ نیاز به اجرای مجدد.',
+      'performanceDetails':
+          'لنز گلس، بلور منوها و کارت‌ها، انعکاس، عکس‌برداری پس‌زمینه و آماده‌سازی گرافیک حذف می‌شوند. حس دکمه‌ها، حرکت کوتاه صفحه و بلور کم فقط در هدر بالا حفظ می‌شوند. چیدمان، اسکرول و امکانات اتصال تغییر نمی‌کنند. تغییر حالت، نیرا را دوباره اجرا می‌کند و اتصال فعلی قطع می‌شود؛ ویندوز ری‌استارت نمی‌شود.',
+      'performanceEnableConfirm':
+          'حالت سبک فعال و نیرا دوباره اجرا شود؟ افکت‌های سنگین گلس حذف می‌شوند؛ حس دکمه‌ها و بلور کم هدر می‌مانند. اتصال فعلی قطع خواهد شد.',
+      'performanceDisableConfirm':
+          'جلوه‌های کامل برگردند و نیرا دوباره اجرا شود؟ اتصال فعلی قطع خواهد شد.',
+      'performanceRestartPending':
+          'برای اجرای بعدی ذخیره شد؛ نیرا را دوباره باز کنید.',
+      'applyRestart': 'اعمال و اجرای مجدد',
+      'navigationPlacement': 'جای نوار صفحه‌ها',
+      'navigationleft': 'چپ',
+      'navigationright': 'راست',
+      'navigationtop': 'بالا',
+      'navigationbottom': 'پایین',
       'subscriptionUpdated': 'اشتراک به‌روز شد',
       'homeCanvasHint': 'با موس جابه‌جا کن؛ گوشه را بکش تا اندازه عوض شود.',
       'autoScrollOn': 'اسکرول خودکار روشن',
@@ -383,7 +441,8 @@ class AppStrings {
       'classicSound': 'صدای قبلی niraN',
       'previewSound': 'پخش نمونه صدا',
       'customizeHome': 'شخصی‌سازی خانه',
-      'homeSlotsHint': 'بخش‌های متحرک را فقط داخل جایگاه مجاز بکش. اطلاعات اتصال ثابت می‌ماند.',
+      'homeSlotsHint':
+          'بخش‌های متحرک را فقط داخل جایگاه مجاز بکش. اطلاعات اتصال ثابت می‌ماند.',
       'usageColumn': 'ستون مصرف',
       'connectionControlOrder': 'دکمه‌های اتصال',
       'left': 'چپ',
@@ -397,20 +456,31 @@ class AppStrings {
       'configToday': 'این کانفیگ · امروز',
       'configTrackedTotal': 'این کانفیگ · ثبت‌شده',
       'allConfigsToday': 'همه کانفیگ‌ها · امروز',
+      'allConfigsMonth': 'همه کانفیگ‌ها · این ماه',
+      'trafficMonthHint':
+          'ترافیک ثبت‌شدهٔ پراکسی در ماه تقویمی جاری، از شروع ثبت ماهانه؛ مصرف قبلیِ ثبت‌نشده تخمین زده نمی‌شود.',
       'trafficMidnightHint': 'امروز در نیمه‌شب محلی صفر می‌شود.',
       'trafficUnavailableHint': 'شمارندهٔ زندهٔ این هسته در دسترس نیست.',
       'trafficIdleHint': 'مصرف ذخیره است؛ سرعت زنده با اتصال برمی‌گردد.',
       'trafficDayUnknownHint':
           'وقفهٔ شمارنده روی نیمه‌شب، مصرف دقیق روز را نامشخص کرده.',
-      'trafficScopeHint': 'مصرف پروکسی niraN از زمان شروع ثبت؛ نه کل اینترنت ویندوز. مصرف تاریخی قابل بازیابی نیست.',
-      'realityProfileHint': 'اینجا فقط اثرانگشت Reality قابل تغییره؛ Cipher suites و FinalMask غیرفعالن و کلیدهای Reality دست‌نخورده می‌مونن.',
-      'realityFingerprintUnsupported': 'اثر انگشت unsafe فقط برای TLS قابل استفاده است و با Reality سازگار نیست.',
-      'darkStyleLightHint': 'در حالت تیره قابل تغییره؛ پس‌زمینهٔ تیره برای فعال شدن حالت تیره حفظ می‌شه.',
+      'trafficScopeHint':
+          'مصرف پروکسی niraN از زمان شروع ثبت؛ نه کل اینترنت ویندوز. مصرف تاریخی قابل بازیابی نیست.',
+      'realityProfileHint':
+          'اینجا فقط اثرانگشت Reality قابل تغییره؛ Cipher suites و FinalMask غیرفعالن و کلیدهای Reality دست‌نخورده می‌مونن.',
+      'realityFingerprintUnsupported':
+          'اثر انگشت unsafe فقط برای TLS قابل استفاده است و با Reality سازگار نیست.',
+      'darkStyleLightHint':
+          'در حالت تیره قابل تغییره؛ پس‌زمینهٔ تیره برای فعال شدن حالت تیره حفظ می‌شه.',
       'proxyCore': 'هستهٔ پروکسی',
       'xrayCoreHint': 'هستهٔ پیش‌فرض؛ مستقل از حالت TUN.',
-      'singBoxCoreHint': 'برای کانفیگ‌های سازگار؛ XHTTP و گزینه‌های اختصاصی Xray پشتیبانی نمی‌شوند. TUN تنظیم جداگانه است.',
-      'localBypass': 'شبکهٔ محلی · همیشه مستقیم',
-      'localBypassHint': 'لوپ‌بک، شبکهٔ داخلی و نام‌های محلی در حالت Proxy و TUN همیشه مستقیم متصل می‌شوند.',
+      'singBoxCoreHint':
+          'برای کانفیگ‌های سازگار؛ XHTTP و گزینه‌های اختصاصی Xray پشتیبانی نمی‌شوند. TUN تنظیم جداگانه است.',
+      'localBypass': 'شبکهٔ محلی / لوکال‌هاست',
+      'localBypassHint': 'مسیر آدرس‌های خصوصی و نام‌های محلی را انتخاب کن.',
+      'localauto': 'خودکار (دسترسی مستقیم محلی)',
+      'localbypass': 'بدون پروکسی',
+      'localproxy': 'از پروکسی',
       'customBypass': 'قواعد اضافی اتصال مستقیم',
       'home': 'خانه',
       'connectionOverview': 'اتصال، حالت‌های شبکه و وضعیت لحظه‌ای',
@@ -448,7 +518,8 @@ class AppStrings {
       'refresh': 'به‌روزرسانی اکنون',
       'updateSubscription': 'به‌روزرسانی اشتراک',
       'notConfigured': 'آدرس داخلی اشتراک تنظیم نشده است.',
-      'configureHint': 'NIRANG_SUBSCRIPTION_URL را در android/gradle.properties یا محیط Build تنظیم کنید.',
+      'configureHint':
+          'NIRANG_SUBSCRIPTION_URL را در android/gradle.properties یا محیط Build تنظیم کنید.',
       'testAll': 'تست همه',
       'sortByTestResults': 'چینش بر اساس نتیجه تست',
       'testRealDelays': 'تست تأخیر واقعی',
@@ -484,7 +555,8 @@ class AppStrings {
       'shortId': 'شناسه کوتاه',
       'delete': 'حذف',
       'deleteServer': 'سرور حذف شود؟',
-      'deleteServerBody': 'این سرور تا به‌روزرسانی موفق بعدی اشتراک، به‌صورت محلی پنهان می‌شود.',
+      'deleteServerBody':
+          'این سرور تا به‌روزرسانی موفق بعدی اشتراک، به‌صورت محلی پنهان می‌شود.',
       'restoreDeletedServers': 'بازیابی سرورهای حذف‌شده',
       'noDeletedServers': 'سرور حذف‌شده‌ای وجود ندارد',
       'deletedServersCount': 'سرور حذف‌شده محلی',
@@ -518,7 +590,8 @@ class AppStrings {
       'globalRoutingHint':
           'تمام ترافیک به‌جز DNS از پروکسی انتخاب‌شده عبور می‌کند.',
       'bypassIran': 'عبور مستقیم ایران',
-      'bypassIranHint': 'دامنه‌های ir، محدوده‌های IP ایران، شبکه محلی و مقصدهای محلی مستقیم متصل می‌شوند.',
+      'bypassIranHint':
+          'دامنه‌های ir، محدوده‌های IP ایران، شبکه محلی و مقصدهای محلی مستقیم متصل می‌شوند.',
       'custom': 'مسیریابی سفارشی',
       'customRuleHint': 'دامنه‌ها و محدوده‌های IP ثبت‌شده مستقیم متصل می‌شوند.',
       'direct': 'مستقیم',
@@ -533,7 +606,8 @@ class AppStrings {
       'invalidRules': 'متن قواعد نامعتبر یا بیش از حد بزرگ است.',
       'invalidPort': 'دو پورت متفاوت بین ۱۰۲۴ تا ۶۵۵۳۵ وارد کنید.',
       'localPortConflict': 'پورت پروکسی محلی در حال استفاده است',
-      'localPortConflictSummary': 'احتمالاً v2rayN یا یک کلاینت پروکسی دیگر از پورت‌های SOCKS/HTTP استفاده می‌کند. آن را ببندید، دوباره تلاش کنید یا پورت‌ها را تغییر دهید.',
+      'localPortConflictSummary':
+          'احتمالاً v2rayN یا یک کلاینت پروکسی دیگر از پورت‌های SOCKS/HTTP استفاده می‌کند. آن را ببندید، دوباره تلاش کنید یا پورت‌ها را تغییر دهید.',
       'changePorts': 'تغییر پورت‌ها',
       'retry': 'تلاش دوباره',
       'invalidVpnAddress': 'یک آدرس خصوصی IPv4 همراه CIDR وارد کنید.',
@@ -632,7 +706,8 @@ class AppStrings {
       'newVersionAvailable': 'نسخه جدید موجود است',
       'viewRelease': 'مشاهده انتشار',
       'upToDate': 'برنامه به‌روز است.',
-      'updateCheckFailed': 'ارتباط با GitHub ممکن نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید.',
+      'updateCheckFailed':
+          'ارتباط با GitHub ممکن نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید.',
       'updateDownload': 'دانلود به‌روزرسانی',
       'downloading': 'در حال دانلود',
       'paused': 'متوقف‌شده',
@@ -651,7 +726,8 @@ class AppStrings {
       'resumeDownload': 'ادامه دانلود',
       'installUpdate': 'نصب به‌روزرسانی',
       'openDownloadFolder': 'بازکردن پوشه دانلود',
-      'performanceModeDialogBody': 'اگر دستگاه شما قدیمی است یا رابط کاربری کند به نظر می‌رسد، حالت عملکرد با کاهش جلوه‌ها و حرکت‌ها پاسخ‌گویی و مصرف باتری را بهتر می‌کند.',
+      'performanceModeDialogBody':
+          'اگر دستگاه شما قدیمی است یا رابط کاربری کند به نظر می‌رسد، حالت عملکرد با کاهش جلوه‌ها و حرکت‌ها پاسخ‌گویی و مصرف باتری را بهتر می‌کند.',
       'enable': 'فعال‌سازی',
       'keepFullEffects': 'حفظ جلوه‌های کامل',
       'hours6': '۶ ساعت',
@@ -661,7 +737,8 @@ class AppStrings {
       'telegram': 'کانال تلگرام',
       'telegramSubtitle': 'به‌روزرسانی‌ها، اختلال‌ها و اخبار سرورها',
       'joinTelegramTitle': 'از وضعیت سرویس باخبر بمانید',
-      'joinTelegramBody': 'برای دریافت به‌روزرسانی‌ها، اختلال‌ها و اخبار سرورها به کانال تلگرام ما بپیوندید.',
+      'joinTelegramBody':
+          'برای دریافت به‌روزرسانی‌ها، اختلال‌ها و اخبار سرورها به کانال تلگرام ما بپیوندید.',
       'joinTelegram': 'عضویت در تلگرام',
       'later': 'بعداً',
       'dontShowAgain': 'دیگر نمایش نده',
@@ -674,7 +751,8 @@ class AppStrings {
       'clearLogsBody': 'رویدادهای محلی و پالایش‌شده برنامه حذف می‌شوند.',
       'operationFailed': 'عملیات ناموفق بود',
       'administratorRequiredTitle': 'نیاز به دسترسی Administrator',
-      'administratorRequiredMessage': 'حالت TUN به دسترسی Administrator نیاز دارد. لطفاً niraN را ببندید و دوباره با گزینه «Run as administrator» اجرا کنید.',
+      'administratorRequiredMessage':
+          'حالت TUN به دسترسی Administrator نیاز دارد. لطفاً niraN را ببندید و دوباره با گزینه «Run as administrator» اجرا کنید.',
       'subscriptionUsageUnknown': 'اطلاعات مصرف در دسترس نیست',
       'serverCount': 'سرور',
       'ipProvider': 'آدرس بررسی اطلاعات اتصال فعلی',
@@ -709,7 +787,8 @@ class AppStrings {
       'finalMaskHint': 'شیء JSON خام FinalMask برای Xray',
       'invalidJson': 'JSON نامعتبر است',
       'finalMaskObjectError': 'FinalMask باید یک شیء JSON باشد.',
-      'allowInsecureUnsupported': 'این لینک allowInsecure می‌خواهد. Xray 26.7.28 دیگر آن را پشتیبانی نمی‌کند؛ اعتبارسنجی گواهی فعال می‌ماند.',
+      'allowInsecureUnsupported':
+          'این لینک allowInsecure می‌خواهد. Xray 26.7.28 دیگر آن را پشتیبانی نمی‌کند؛ اعتبارسنجی گواهی فعال می‌ماند.',
       'copyShareLink': 'کپی لینک اشتراک‌گذاری',
       'shareLinkCopied': 'لینک کپی شد',
       'emptyServers': 'هیچ سرور VLESS، VMess یا Trojan معتبری بارگذاری نشد.',

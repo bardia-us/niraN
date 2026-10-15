@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -59,7 +60,7 @@ abstract interface class WindowsRegistryTransport {
 final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
   HttpsWindowsRegistryTransport({
     Uri? endpoint,
-    this.timeout = const Duration(seconds: 12),
+    this.timeout = const Duration(seconds: 10),
   }) : endpoint = endpoint ?? Uri.parse(_endpoint) {
     if (this.endpoint.scheme != 'https' ||
         this.endpoint.toString() != _endpoint) {
@@ -80,42 +81,48 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
   }) async {
     final client = HttpClient()..connectionTimeout = timeout;
     try {
-      final request = await client.postUrl(endpoint).timeout(timeout);
-      request
-        ..followRedirects = false
-        ..headers.contentType = ContentType.json
-        ..headers.set(HttpHeaders.acceptHeader, 'application/json, text/plain')
-        ..headers.set(HttpHeaders.userAgentHeader, 'niraN-device-access/0.3.7');
-      if (token != null) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      }
-      request.write(jsonEncode(payload));
-      final response = await request.close().timeout(
-        const Duration(seconds: 20),
-      );
-      final output = BytesBuilder(copy: false);
-      await for (final chunk in response) {
-        output.add(chunk);
-        if (output.length > maximumBytes) {
-          throw const HttpException('Registry response is too large');
+      return await (() async {
+        final request = await client.postUrl(endpoint);
+        request
+          ..followRedirects = false
+          ..headers.contentType = ContentType.json
+          ..headers.set(
+            HttpHeaders.acceptHeader,
+            'application/json, text/plain',
+          )
+          ..headers.set(
+            HttpHeaders.userAgentHeader,
+            'niraN-device-access/0.3.7',
+          );
+        if (token != null) {
+          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
         }
-      }
-      final bytes = output.takeBytes();
-      Map<String, Object?>? json;
-      if (response.headers.contentType?.mimeType == 'application/json' ||
-          response.statusCode < 200 ||
-          response.statusCode >= 300) {
-        final decoded = jsonDecode(utf8.decode(bytes));
-        if (decoded is Map) {
-          json = decoded.map((key, value) => MapEntry('$key', value));
+        request.write(jsonEncode(payload));
+        final response = await request.close();
+        final output = BytesBuilder(copy: false);
+        await for (final chunk in response) {
+          output.add(chunk);
+          if (output.length > maximumBytes) {
+            throw const HttpException('Registry response is too large');
+          }
         }
-      }
-      return RegistryResponse(
-        statusCode: response.statusCode,
-        bytes: bytes,
-        json: json,
-        usageHeader: response.headers.value('subscription-userinfo'),
-      );
+        final bytes = output.takeBytes();
+        Map<String, Object?>? json;
+        if (response.headers.contentType?.mimeType == 'application/json' ||
+            response.statusCode < 200 ||
+            response.statusCode >= 300) {
+          final decoded = jsonDecode(utf8.decode(bytes));
+          if (decoded is Map) {
+            json = decoded.map((key, value) => MapEntry('$key', value));
+          }
+        }
+        return RegistryResponse(
+          statusCode: response.statusCode,
+          bytes: bytes,
+          json: json,
+          usageHeader: response.headers.value('subscription-userinfo'),
+        );
+      })().timeout(timeout);
     } finally {
       client.close(force: true);
     }
@@ -164,8 +171,22 @@ final class WindowsRemoteAccessService
         'This Windows device has been blocked by the administrator',
       );
     }
+    if (accepted && _record?['remote_access_state'] == 'outdated') {
+      throw DeviceAccessException(
+        'update_required',
+        'niraN must be updated to ${_record?['minimum_version'] ?? '0.3.1'} or newer',
+      );
+    }
     return accepted;
   }
+
+  /// Only a previously successful, credentialed registration may open cached UI.
+  /// Network operations still call requireAllowed; the backend refreshes the gate.
+  bool get hasCachedAllowedAccess =>
+      _record?['consent_accepted'] == true &&
+      _record?['consent_version'] == _consentVersion &&
+      _record?['remote_access_state'] == 'allowed' &&
+      _token != null;
 
   @override
   Future<void> accept() async {
@@ -330,8 +351,11 @@ final class WindowsRemoteAccessService
   Future<void> _refreshRuntimeVersion() async {
     final current = _record;
     if (current == null) return;
-    final info = await _infoProvider.read();
-    final version = _clean(info.appVersion, '0.3.7');
+    final provider = _infoProvider;
+    final runtimeVersion = provider is WindowsDeviceRegistrationInfoProvider
+        ? await provider.readAppVersion()
+        : (await provider.read()).appVersion;
+    final version = _clean(runtimeVersion, '0.3.7');
     if (current['app_version'] == version) return;
     _record = {...current, 'app_version': version};
     await _persist();
@@ -389,7 +413,11 @@ final class WindowsRemoteAccessService
       );
     }
     if (outdated) {
-      _record = {...?_record, 'remote_access_state': 'outdated'};
+      _record = {
+        ...?_record,
+        'remote_access_state': 'outdated',
+        'minimum_version': '${json?['minimum_version'] ?? '0.3.1'}',
+      };
       await _persist();
       throw DeviceAccessException(
         'update_required',

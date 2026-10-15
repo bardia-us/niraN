@@ -79,6 +79,16 @@ final class WindowsTrafficLedger {
     _sessionDownload += deltaDown;
     final entry = _configs.putIfAbsent(_activeId!, _ConfigTraffic.new);
     final day = _day(at);
+    final month = day.substring(0, 7);
+    if (entry.month != month) {
+      entry.month = month;
+      entry.monthUpload = entry.monthDownload = 0;
+      final intervalStart = _previousAt ?? _sessionStartedAt;
+      entry.monthComplete =
+          intervalStart == null ||
+          _day(intervalStart).substring(0, 7) == month ||
+          (_previousAt != null && seconds <= 6 && _available);
+    }
     if (entry.day != day) {
       entry.day = day;
       entry.todayUpload = entry.todayDownload = 0;
@@ -96,6 +106,8 @@ final class WindowsTrafficLedger {
     entry.download += deltaDown;
     entry.todayUpload += deltaUp;
     entry.todayDownload += deltaDown;
+    entry.monthUpload += deltaUp;
+    entry.monthDownload += deltaDown;
     _observed = _available = true;
     _reason = null;
   }
@@ -113,6 +125,17 @@ final class WindowsTrafficLedger {
 
   TrafficUsage snapshot(String? selectedId, DateTime at) {
     final day = _day(at);
+    final month = day.substring(0, 7);
+    final lastObservedAt = _previousAt ?? _sessionStartedAt;
+    final awaitingMonthBoundary =
+        _reason != 'disconnected' &&
+        _activeId != null &&
+        lastObservedAt != null &&
+        _day(lastObservedAt).substring(0, 7) != month;
+    final monthKnown =
+        !awaitingMonthBoundary &&
+        _configs.values.any((e) => e.month.isNotEmpty) &&
+        !_configs.values.any((e) => e.month == month && !e.monthComplete);
     final selected = _configs[selectedId];
     final active = selectedId != null && selectedId == _activeId;
     return TrafficUsage(
@@ -154,6 +177,18 @@ final class WindowsTrafficLedger {
               (sum, e) => sum + (e.day == day ? e.todayDownload : 0),
             ),
       uploadBytesPerSecond: active && _available ? _uploadRate : null,
+      aggregateMonthUpload: monthKnown
+          ? _configs.values.fold<int>(
+              0,
+              (sum, e) => sum + (e.month == month ? e.monthUpload : 0),
+            )
+          : null,
+      aggregateMonthDownload: monthKnown
+          ? _configs.values.fold<int>(
+              0,
+              (sum, e) => sum + (e.month == month ? e.monthDownload : 0),
+            )
+          : null,
       downloadBytesPerSecond: active && _available ? _downloadRate : null,
       unavailableReason: active ? _reason : 'disconnected',
     );
@@ -191,6 +226,23 @@ final class WindowsTrafficLedger {
           ..todayDownload = min(values[3] as int, values[1] as int)
           ..day = value['day'] as String
           ..dayComplete = value['dayComplete'] != false;
+        // v1 ledgers without monthly fields retain daily/lifetime history.
+        // Never infer a calendar month from an all-time counter.
+        final entry = _configs[item.key]!;
+        if (value['month'] is String &&
+            RegExp(r'^\d{4}-\d{2}$').hasMatch(value['month'] as String) &&
+            value['monthUpload'] is int &&
+            value['monthDownload'] is int &&
+            (value['monthUpload'] as int) >= 0 &&
+            (value['monthDownload'] as int) >= 0) {
+          entry.month = value['month'] as String;
+          entry.monthUpload = min(value['monthUpload'] as int, entry.upload);
+          entry.monthDownload = min(
+            value['monthDownload'] as int,
+            entry.download,
+          );
+          entry.monthComplete = value['monthComplete'] != false;
+        }
       }
     } on Object {
       // A damaged ledger means unobserved totals, never substituted zero.
@@ -240,6 +292,10 @@ final class _ConfigTraffic {
   int todayDownload = 0;
   String day = '';
   bool dayComplete = true;
+  String month = '';
+  int monthUpload = 0;
+  int monthDownload = 0;
+  bool monthComplete = true;
   Map<String, Object?> toMap() => {
     'upload': upload,
     'download': download,
@@ -247,6 +303,10 @@ final class _ConfigTraffic {
     'todayDownload': todayDownload,
     'day': day,
     'dayComplete': dayComplete,
+    'month': month,
+    'monthUpload': monthUpload,
+    'monthDownload': monthDownload,
+    'monthComplete': monthComplete,
   };
 }
 

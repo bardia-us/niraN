@@ -497,6 +497,8 @@ class _GlassGroupItemWidgetState extends State<_GlassGroupItemWidget>
             ? (widget.onTapOverride ?? widget.item.onTap)
             : null,
         behavior: HitTestBehavior.opaque,
+        // Semantics (label, role, tap) live on the GlassFocusRegion node.
+        excludeFromSemantics: true,
         child: ValueListenableBuilder<bool>(
           valueListenable: isHovered,
           builder: (context, isHov, child) {

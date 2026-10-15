@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import 'package:niran/core/widgets/glass_surface.dart';
 import 'package:niran/core/widgets/interactive_depth.dart';
 import 'package:niran/features/vpn/app_controller.dart';
 import 'package:niran/main.dart';
+import 'package:niran/features/servers/servers_screen.dart';
 
 import 'support/pump_glass_route.dart';
 
@@ -227,6 +229,67 @@ class _PerformancePromptController extends AppController {
 }
 
 void main() {
+  testWidgets('startup raster callback is disposed safely after readiness', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(() => _FakeAppController()),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    ui.PlatformDispatcher.instance.onReportTimings?.call([
+      ui.FrameTiming(
+        frameNumber: 1000000,
+        vsyncStart: 100,
+        buildStart: 110,
+        buildFinish: 120,
+        rasterStart: 130,
+        rasterFinish: 140,
+        rasterFinishWallTime: 0,
+      ),
+    ]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+    // Remount after the one-time gate has completed: no callback is added.
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appControllerProvider.overrideWith(() => _FakeAppController()),
+        ],
+        child: const NirangApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets(
+    'startup defers inactive pages and preserves them after first visit',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appControllerProvider.overrideWith(() => _FakeAppController()),
+          ],
+          child: const NirangApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(ServersScreen, skipOffstage: false), findsNothing);
+      await tester.tap(find.text('Servers').last);
+      await tester.pumpAndSettle();
+      final state = tester.state(find.byType(ServersScreen));
+      await tester.tap(find.text('Home').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Servers').last);
+      await tester.pumpAndSettle();
+      expect(tester.state(find.byType(ServersScreen)), same(state));
+    },
+  );
   setUpAll(warmGlassRouteTests);
 
   testWidgets('desktop and compact pages keep layout and sidebar preference', (
@@ -262,11 +325,13 @@ void main() {
           );
         }
         if (width >= 1200) {
-          final before = tester.getRect(find.byType(NavigationRail));
+          final before = tester.getRect(
+            find.byKey(const Key('navigation-dock')),
+          );
           await controller.updateSettings({'sidebarRight': true});
           await tester.pumpAndSettle();
           expect(
-            tester.getRect(find.byType(NavigationRail)).left,
+            tester.getRect(find.byKey(const Key('navigation-dock'))).left,
             greaterThan(before.left),
           );
         }
@@ -438,7 +503,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('niraN'), findsOneWidget);
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byKey(const Key('navigation-dock')), findsOneWidget);
     expect(find.text('Local traffic usage'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -458,12 +523,13 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.text('Loading settings…'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     gate.complete();
     await tester.pumpAndSettle();
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byKey(const Key('navigation-dock')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -692,7 +758,10 @@ void main() {
     expect(find.text('Fingerprint'), findsOneWidget);
     expect(find.text('Cipher suites'), findsOneWidget);
     expect(find.text('FinalMask JSON'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).at(2), '{bad json');
+    await tester.enterText(
+      find.byKey(const Key('profile-finalmask')),
+      '{bad json',
+    );
     await tester.ensureVisible(find.text('Save'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save'));

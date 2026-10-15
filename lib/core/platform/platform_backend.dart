@@ -38,3 +38,7 @@ abstract interface class NiranPlatformBackend {
   Future<void> recordTelegramDecision(String decision);
   Future<void> recordFlutterError(String message);
 }
+
+abstract interface class NiranRestartableBackend {
+  Future<void> restartApplication();
+}

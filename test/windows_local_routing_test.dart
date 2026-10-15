@@ -11,44 +11,53 @@ void main() {
       )
       .single;
   for (final mode in ['global', 'bypassIran', 'custom']) {
-    test('Xray $mode always bypasses local before QUIC/DNS rules', () {
-      final root =
-          jsonDecode(
-                const WindowsXrayConfigBuilder().build(
-                  server: server,
-                  settings: {'routingMode': mode, 'blockQuic': true},
-                  iranCidrs: const ['2.144.0.0/14'],
-                ),
-              )
-              as Map;
-      final rules = ((root['routing'] as Map)['rules'] as List).cast<Map>();
-      final local = rules.indexWhere(
-        (r) => (r['ip'] as List?)?.contains('192.168.0.0/16') == true,
-      );
-      expect(local, greaterThanOrEqualTo(0));
-      expect(rules[local]['outboundTag'], 'direct');
-      expect(
-        (rules[local]['ip'] as List),
-        containsAll([
-          '127.0.0.0/8',
-          '10.0.0.0/8',
-          '100.64.0.0/10',
-          'fe80::/10',
-        ]),
-      );
-      final blocked = rules.indexWhere((r) => r['outboundTag'] == 'blocked');
-      expect(local, lessThan(blocked));
-      final dns = ((root['dns'] as Map)['servers'] as List).whereType<Map>();
-      expect(
-        dns.any(
-          (r) =>
-              r['address'] == 'localhost' &&
-              r['finalQuery'] == true &&
-              (r['domains'] as List?)?.contains('domain:local') == true,
-        ),
-        isTrue,
-      );
-    });
+    test(
+      'Xray $mode defaults to local bypass after DNS interception and before QUIC blocking',
+      () {
+        final root =
+            jsonDecode(
+                  const WindowsXrayConfigBuilder().build(
+                    server: server,
+                    settings: {'routingMode': mode, 'blockQuic': true},
+                    iranCidrs: const ['2.144.0.0/14'],
+                  ),
+                )
+                as Map;
+        final rules = ((root['routing'] as Map)['rules'] as List).cast<Map>();
+        final local = rules.indexWhere(
+          (r) => (r['ip'] as List?)?.contains('192.168.0.0/16') == true,
+        );
+        expect(local, greaterThanOrEqualTo(0));
+        expect(rules[local]['outboundTag'], 'direct');
+        expect(
+          (rules[local]['ip'] as List),
+          containsAll([
+            '127.0.0.0/8',
+            '10.0.0.0/8',
+            '100.64.0.0/10',
+            'fe80::/10',
+          ]),
+        );
+        final blocked = rules.indexWhere((r) => r['outboundTag'] == 'blocked');
+        expect(local, lessThan(blocked));
+        expect(
+          local,
+          greaterThan(
+            rules.indexWhere((rule) => rule['outboundTag'] == 'dns-out'),
+          ),
+        );
+        final dns = ((root['dns'] as Map)['servers'] as List).whereType<Map>();
+        expect(
+          dns.any(
+            (r) =>
+                r['address'] == 'localhost' &&
+                r['finalQuery'] == true &&
+                (r['domains'] as List?)?.contains('domain:local') == true,
+          ),
+          isTrue,
+        );
+      },
+    );
     test(
       'sing-box TUN $mode always bypasses LAN and resolves local with system DNS',
       () {
@@ -67,7 +76,7 @@ void main() {
           rules.indexWhere(
             (r) => (r['ip_cidr'] as List?)?.contains('192.168.0.0/16') == true,
           ),
-          lessThan(rules.indexWhere((r) => r['action'] == 'hijack-dns')),
+          greaterThan(rules.indexWhere((r) => r['action'] == 'hijack-dns')),
         );
         expect(
           rules.any(

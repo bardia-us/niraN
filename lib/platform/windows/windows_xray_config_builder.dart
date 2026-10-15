@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'windows_server_record.dart';
 import 'windows_routing_policy.dart';
+import 'windows_tls_certificate_policy.dart';
 
 final class WindowsXrayConfigBuilder {
   const WindowsXrayConfigBuilder();
@@ -385,6 +386,7 @@ final class WindowsXrayConfigBuilder {
     WindowsServerRecord server,
     Map<String, Object?> settings,
   ) {
+    final certificateFields = WindowsTlsCertificatePolicy.xrayFields(server);
     final network = server.transport.toLowerCase() == 'splithttp'
         ? 'xhttp'
         : server.transport.toLowerCase();
@@ -439,11 +441,16 @@ final class WindowsXrayConfigBuilder {
     switch (server.security.toLowerCase()) {
       case 'tls':
         final fingerprint = _fingerprint(server, settings, tls: true);
+        final ech = (server.parameters['echConfigList'] ?? '').trim().isNotEmpty
+            ? server.parameters['echConfigList']!
+            : server.parameters['ech'] ?? '';
         result['tlsSettings'] = {
           'serverName': _tlsServerName(server),
+          ...certificateFields,
           if (_csv(server.parameters['alpn']).isNotEmpty)
             'alpn': _csv(server.parameters['alpn']),
           'fingerprint': fingerprint,
+          if (ech.trim().isNotEmpty) 'echConfigList': ech,
           if ((server.parameters['cs'] ?? '').trim().isNotEmpty)
             'cipherSuites': server.parameters['cs']!.trim(),
         };
@@ -580,32 +587,43 @@ final class WindowsXrayConfigBuilder {
     if (_bool(settings, 'directDnsEnabled', false) && directDns.isNotEmpty) {
       servers.insert(0, {
         'address': directDns,
-        'domains': ['domain:ir', 'domain:local'],
+        'domains': [
+          'domain:ir',
+          if (WindowsRoutingPolicy.bypassLocal(settings)) 'domain:local',
+        ],
         'skipFallback': true,
+        'tag': 'direct-dns',
       });
     }
     if (WindowsRoutingPolicy.bypassIran(settings) && domestic.isNotEmpty) {
       servers.insert(0, {
         'address': domestic.first,
-        'domains': ['domain:ir', 'domain:local'],
+        'domains': [
+          'domain:ir',
+          if (WindowsRoutingPolicy.bypassLocal(settings)) 'domain:local',
+        ],
+        'tag': 'direct-dns',
       });
     }
     if (_bool(settings, 'enableLocalDns', true) &&
         _bool(settings, 'enableFakeDns', false)) {
       servers.insert(0, 'fakedns');
     }
-    servers.insert(0, {
-      'address': 'localhost',
-      'domains': WindowsRoutingPolicy.localDomains,
-      'skipFallback': true,
-      'finalQuery': true,
-    });
+    if (WindowsRoutingPolicy.bypassLocal(settings)) {
+      servers.insert(0, {
+        'address': 'localhost',
+        'domains': WindowsRoutingPolicy.localDomains,
+        'skipFallback': true,
+        'finalQuery': true,
+      });
+    }
     final configuredStrategy = '${settings['dnsQueryStrategy'] ?? 'Auto'}';
     final queryStrategy = configuredStrategy == 'Auto'
         ? (_bool(settings, 'enableIpv6', true) ? 'UseIP' : 'UseIPv4')
         : configuredStrategy;
     return {
       'servers': servers,
+      'tag': 'remote-dns',
       'queryStrategy': queryStrategy,
       'enableParallelQuery': _bool(settings, 'dnsParallelQuery', false),
       'serveStale': _bool(settings, 'dnsServeStale', false),
@@ -659,9 +677,24 @@ final class WindowsXrayConfigBuilder {
       'domain:localhost',
       'domain:local',
     ];
+    final localOutbound = WindowsRoutingPolicy.bypassLocal(settings)
+        ? 'direct'
+        : 'proxy';
     rules.insertAll(0, [
-      {'type': 'field', 'domain': privateDomains, 'outboundTag': 'direct'},
-      {'type': 'field', 'ip': privateIps, 'outboundTag': 'direct'},
+      {
+        'type': 'field',
+        'inboundTag': ['remote-dns'],
+        'outboundTag': 'proxy',
+      },
+      {
+        'type': 'field',
+        'inboundTag': ['direct-dns'],
+        'outboundTag': 'direct',
+      },
+    ]);
+    rules.addAll([
+      {'type': 'field', 'domain': privateDomains, 'outboundTag': localOutbound},
+      {'type': 'field', 'ip': privateIps, 'outboundTag': localOutbound},
     ]);
     if (WindowsRoutingPolicy.bypassIran(settings)) {
       if (iranCidrs.isEmpty) {

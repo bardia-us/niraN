@@ -214,7 +214,7 @@ void main() {
     await horizontal.moveBy(const Offset(-30, 18));
     await horizontal.up();
     await tester.pump();
-    expect(result!['logs'].width, 70);
+    expect(result!['logs'].width, HomeLayout.defaults()['logs'].width - 6);
     expect(result!['logs'].height, 32);
     final vertical = await tester.startGesture(
       tester.getCenter(find.byKey(const Key('resize-height-home-logs'))),
@@ -223,7 +223,7 @@ void main() {
     await vertical.moveBy(const Offset(30, -20));
     await vertical.up();
     await tester.pump();
-    expect(result!['logs'].width, 76);
+    expect(result!['logs'].width, HomeLayout.defaults()['logs'].width);
     expect(result!['logs'].height, 28);
   });
 

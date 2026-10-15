@@ -28,6 +28,7 @@ class GlassMenuItem extends StatefulWidget {
     this.maxLines = 1,
     this.enablePressScale = true,
     this.closeDelay,
+    this.submenu,
   });
 
   /// The primary text of the item.
@@ -98,6 +99,18 @@ class GlassMenuItem extends StatefulWidget {
   /// widget (e.g. a [GlassSwitch]) whose state transition should be visible
   /// before the menu morphs away.
   final Duration? closeDelay;
+
+  /// Child items shown when this item is activated inside a [GlassMenu].
+  ///
+  /// When non-null, activating the item (tap, slide-and-release, or
+  /// [GlassMenuController.endGlide]) does not call [onTap] or close the menu.
+  /// Instead a card opens over the parent, which remains visible but recedes
+  /// and dims. The card's header repeats this item's icon and title, in bold,
+  /// with a downward chevron. Activating the header collapses the card.
+  /// Submenus may nest; only the frontmost card's actions are interactive.
+  ///
+  /// When [trailing] is null a submenu item shows a chevron.
+  final List<Widget>? submenu;
 
   @override
   State<GlassMenuItem> createState() => _GlassMenuItemState();
@@ -261,12 +274,15 @@ class _GlassMenuItemState extends State<GlassMenuItem>
             (widget.isPressed == true) || localPressed;
         final bool effectiveSelected = widget.isSelected;
 
+        final dark = CupertinoTheme.brightnessOf(context) == Brightness.dark;
+        final hoverColor = dark ? const Color(0x1AFFFFFF) : const Color(0x16000000);
+        final pressColor = dark ? const Color(0x26FFFFFF) : const Color(0x24000000);
         final Color backgroundColor = effectiveSelected
             ? const Color(0x00000000) // Parent renders the sliding pill
             : effectivePressed
-                ? const Color(0x26FFFFFF) // Standalone press
+                ? pressColor
                 : (isHov || isFoc)
-                    ? const Color(0x1AFFFFFF)
+                    ? hoverColor
                     : const Color(0x00000000);
 
         // Scale effect on press (subtle squash like iOS buttons)
@@ -295,6 +311,16 @@ class _GlassMenuItemState extends State<GlassMenuItem>
                 opacity: widget.enabled ? 1.0 : 0.4,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
+                    // A submenu row shows a chevron unless the caller supplied
+                    // its own trailing widget.
+                    final Widget? trailing = widget.trailing ??
+                        (widget.submenu != null
+                            ? Icon(
+                                CupertinoIcons.chevron_right,
+                                size: 16,
+                                color: iconColor.withValues(alpha: 0.6),
+                              )
+                            : null);
                     final row = Row(
                       children: [
                         // Icon
@@ -343,7 +369,7 @@ class _GlassMenuItemState extends State<GlassMenuItem>
                         ),
 
                         // Trailing
-                        if (widget.trailing != null) widget.trailing!,
+                        if (trailing != null) trailing,
                       ],
                     );
 
@@ -351,7 +377,7 @@ class _GlassMenuItemState extends State<GlassMenuItem>
                       final double minRequired = (widget.icon != null
                               ? (widget.iconSize + 12.0)
                               : 0.0) +
-                          (widget.trailing != null ? 24.0 : 0.0);
+                          (trailing != null ? 24.0 : 0.0);
                       if (constraints.maxWidth < minRequired) {
                         return OverflowBox(
                           alignment: Alignment.centerLeft,
@@ -377,6 +403,9 @@ class _GlassMenuItemState extends State<GlassMenuItem>
       enabled: widget.enabled,
       isButton: true,
       semanticLabel: widget.title,
+      // The title label replaces the row's own text, so carry the subtitle
+      // as the value: announced after the title, on the same node.
+      semanticValue: widget.subtitle,
       isFocusedNotifier: isFocused,
       isHoveredNotifier: isHovered,
       onKeyboardActivate: _handleKeyboardActivate,
@@ -388,6 +417,10 @@ class _GlassMenuItemState extends State<GlassMenuItem>
         onTapCancel: widget.enabled ? () => isPressed.value = false : null,
         onTap: widget.enabled ? widget.onTap : null,
         behavior: HitTestBehavior.opaque,
+        // The tap lives on the GlassFocusRegion node with the label (via
+        // semanticOnTap); a second one here landed on a separate, unnamed
+        // node, as GlassButton documents.
+        excludeFromSemantics: true,
         child: content,
       ),
     );

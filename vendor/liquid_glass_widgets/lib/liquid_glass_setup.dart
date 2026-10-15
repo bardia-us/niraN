@@ -38,6 +38,12 @@ import 'widgets/effects/progressive_blur.dart';
 class LiquidGlassWidgets {
   LiquidGlassWidgets._();
 
+  /// Compatibility accessor for consumers that must distinguish a completed
+  /// preload from a loader-reported shader failure.
+  static bool get premiumShadersReady =>
+      MultiShaderBuilder.cachedProgram(ShaderKeys.blendedGeometry) != null &&
+      MultiShaderBuilder.cachedProgram(ShaderKeys.liquidGlassRender) != null;
+
   // ── Global accessors ───────────────────────────────────────────────────────
 
   /// Whether glass widgets automatically respect system accessibility settings
@@ -101,11 +107,6 @@ class LiquidGlassWidgets {
   /// | `liquid_glass_geometry_blended.frag` | Geometry / SDF pass |
   /// | `liquid_glass_render.frag` | Final composite pass |
   /// Controls shader preloading and warm-up behaviour during [initialize].
-  /// Both programs must exist: precache may report errors yet finish normally.
-  static bool get premiumShadersReady =>
-      MultiShaderBuilder.cachedProgram(ShaderKeys.blendedGeometry) != null &&
-      MultiShaderBuilder.cachedProgram(ShaderKeys.liquidGlassRender) != null;
-
   static Future<void> initialize({
     bool enablePerformanceMonitor = true,
     GlassWarmUpMode warmUpMode = GlassWarmUpMode.auto,
@@ -296,6 +297,9 @@ class LiquidGlassWidgets {
         initialQuality: config.initialQuality,
         targetFrameMs: config.targetFrameMs,
         allowStepUp: config.allowStepUp,
+        warmupPremiumThresholdMs: config.warmupPremiumThresholdMs,
+        warmupStandardThresholdMs: config.warmupStandardThresholdMs,
+        frostStep: config.frostStep,
         onQualityChanged: config.onQualityChanged,
         onDiagnostic: config.onDiagnostic,
         debugLogDiagnostics: config.debugLogDiagnostics,

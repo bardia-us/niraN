@@ -142,20 +142,15 @@ uniform float uLensModel;
 // it, which texelAt() takes back out.
 uniform vec4 uFrost;
 
+// Slot 45: uBodyShade — how far a bright backdrop is pulled down; 0, the
+// default, leaves this shader bit for bit unchanged. See
+// LiquidGlassSettings.bodyShade.
+uniform float uBodyShade;
+
 uniform sampler2D uBackgroundTexture;
 uniform sampler2D uGeometryTexture;
 
 layout(location = 0) out vec4 fragColor;
-
-// Integral of the existing 1-smoothstep rim profile. Averaging over a pixel
-// footprint keeps subpixel rims from flashing/dotting as their phase changes.
-// This changes sampling, not the profile's width, intensity or material recipe.
-float hairlineIntegral(float distance, float start, float end) {
-    float width = end - start;
-    float t = clamp((distance - start) / width, 0.0, 1.0);
-    return min(distance - start, 0.0)
-         + width * (t - t * t * t + 0.5 * t * t * t * t);
-}
 
 // ── Manual Bilinear Filtering ─────────────────────────────────────────────
 // Impeller's implicit BackdropFilterLayer sampler is bound to the
@@ -237,6 +232,18 @@ vec3 texelAt(vec2 p, vec2 invSize) {
 //   frost = op * cloud + (1 - op) * max(ghost, cloud - clamp)   (clamp > 0)
 //   frost = op * cloud + (1 - op) * min(ghost, cloud - clamp)   (clamp < 0)
 vec3 frostAt(vec2 p, vec2 q, vec2 invSize) {
+    vec2 qb = floor(q);
+    float ya = qb.y - mod(qb.y + 1.0, 2.0); // odd row at or above q
+    float t = clamp((q.y - (ya + 0.5)) * 0.5, 0.0, 1.0);
+    vec3 cloud = mix(texelAt(vec2(qb.x, ya), invSize),
+                     texelAt(vec2(qb.x, ya + 2.0), invSize), t);
+    // A fully opaque cloud hides the ghost: mix(held, cloud, 1.0) is cloud,
+    // so skip the 45 taps it would take. uFrost.x is uniform, so the whole
+    // draw takes the same branch.
+    if (uFrost.x >= 1.0) {
+        return cloud;
+    }
+
     float sigma = max(uFrost.z, 0.3);
     vec2 base = floor(p);
     // Snap the centre row to the even (sharp) row at or above p.
@@ -255,25 +262,40 @@ vec3 frostAt(vec2 p, vec2 q, vec2 invSize) {
     float slope = uFrost.w - 1.0;
     vec3 acc = vec3(0.0);
     float wsum = 0.0;
-    for (int j = -2; j <= 2; j++) {
-        float y = cy + 2.0 * float(j);
-        float dy = y + 0.5 - p.y;
-        float wy = exp(-dy * dy * inv2s2);
-        for (int i = 0; i < 9; i++) {
-            float x = base.x + float(i - 4);
-            vec3 c = texelAt(vec2(x, y), invSize);
-            float w = wy * wx[i] * (1.0 + slope * dot(c, LUMA_WEIGHTS));
-            acc += w * c;
-            wsum += w;
+    if (uFrost.z <= 0.3) {
+        // At the floor sigma of 0.3 px only the three columns around p on
+        // the two even rows either side of it carry weight: every other tap
+        // weighs under 4e-6 of the centre, so these 6 taps come out within
+        // 0.03/255 of all 45, with the luminance weighting at its extremes
+        // (frost_ghost_taps_test.dart). That is the sigma whenever the blur
+        // runs as its own pass or is 0. uFrost.z is uniform.
+        for (int j = 0; j <= 1; j++) {
+            float y = cy + 2.0 * float(j);
+            float dy = y + 0.5 - p.y;
+            float wy = exp(-dy * dy * inv2s2);
+            for (int i = 3; i <= 5; i++) {
+                float x = base.x + float(i - 4);
+                vec3 c = texelAt(vec2(x, y), invSize);
+                float w = wy * wx[i] * (1.0 + slope * dot(c, LUMA_WEIGHTS));
+                acc += w * c;
+                wsum += w;
+            }
+        }
+    } else {
+        for (int j = -2; j <= 2; j++) {
+            float y = cy + 2.0 * float(j);
+            float dy = y + 0.5 - p.y;
+            float wy = exp(-dy * dy * inv2s2);
+            for (int i = 0; i < 9; i++) {
+                float x = base.x + float(i - 4);
+                vec3 c = texelAt(vec2(x, y), invSize);
+                float w = wy * wx[i] * (1.0 + slope * dot(c, LUMA_WEIGHTS));
+                acc += w * c;
+                wsum += w;
+            }
         }
     }
     vec3 ghost = acc / max(wsum, 1e-5);
-
-    vec2 qb = floor(q);
-    float ya = qb.y - mod(qb.y + 1.0, 2.0); // odd row at or above q
-    float t = clamp((q.y - (ya + 0.5)) * 0.5, 0.0, 1.0);
-    vec3 cloud = mix(texelAt(vec2(qb.x, ya), invSize),
-                     texelAt(vec2(qb.x, ya + 2.0), invSize), t);
 
     // frostClamp 0 leaves both sides free.
     float k = uFrost.y;
@@ -416,20 +438,7 @@ void main() {
     vec2 lensDisplacement = displacement;
     float hairline = 0.0;
     if (uRimConfig.x > 0.001) {
-        float lineStart = 0.75 * dprScale;
-        float lineEnd = 2.0 * dprScale;
-        // Project one physical pixel onto the SDF normal. Use the analytic
-        // footprint rather than derivatives after an alpha-discard branch.
-        vec2 edgeNormal = normalXY / max(length(normalXY), 1e-4);
-        float footprint = max(1e-3, abs(edgeNormal.x) + abs(edgeNormal.y));
-        if (lineEnd - lineStart < footprint) {
-            float halfPixel = 0.5 * footprint;
-            hairline = (hairlineIntegral(rimDist + halfPixel, lineStart, lineEnd)
-                      - hairlineIntegral(rimDist - halfPixel, lineStart, lineEnd))
-                     / footprint;
-        } else {
-            hairline = 1.0 - smoothstep(lineStart, lineEnd, rimDist);
-        }
+        hairline = 1.0 - smoothstep(0.75 * dprScale, 2.0 * dprScale, rimDist);
         // rimDist saturates at uThickness on the flat face, which on thin
         // glass is inside the line's width: keep the line off the face.
         hairline *= 1.0 - step(0.999, normalizedHeight);
@@ -527,7 +536,17 @@ void main() {
     // a normal tilted < 0.6° from vertical — visually indistinguishable from a
     // zero-displacement sample at any display resolution.
     vec4 refractColor;
-    if (dot(normalXY, normalXY) < 1e-4) {
+    if (uFrost.x > 0.0 && hairline <= 0.0) {
+        // Frosted body: the frost below replaces the colour, and only whether
+        // a backdrop was captured here is kept (its alpha, see below). One
+        // texel answers that; the bilinear sample would take 4 (12 with
+        // chromatic aberration).
+        float a = texture(uBackgroundTexture, screenUV).a;
+        if (uBackgroundFallback.a > 0.0) {
+            a += uBackgroundFallback.a * (1.0 - a);
+        }
+        refractColor = vec4(0.0, 0.0, 0.0, a);
+    } else if (dot(normalXY, normalXY) < 1e-4) {
         // Flat interior — zero displacement, sample directly.
         refractColor = textureBilinear(screenUV, physTexSize, invTexSize);
     } else if (uChromaticAberration < 0.01) {
@@ -660,6 +679,15 @@ void main() {
         mix(1.0, smoothstep(WHITEN_LO, WHITEN_HI, whitenLuma), uWhitenGated);
     finalColor.rgb = mix(finalColor.rgb, vec3(1.0),
                          clamp(uWhiten, 0.0, 1.0) * whitenGate * (1.0 - hairline));
+    // iOS 27 body shade (uBodyShade): the dark material pulls a bright
+    // backdrop down, white to about 184/255, where its tint alone would lift
+    // it. Scaled by 1 - shade * luma^2, so darks keep the tint's lift. The
+    // hairline is shaded too, and the rim shade below then sits its fixed
+    // step under the darkened backdrop, as the native dark outline does.
+    if (uBodyShade > 0.0) {
+        float shadeLuma = dot(finalColor.rgb, LUMA_WEIGHTS);
+        finalColor.rgb *= 1.0 - uBodyShade * shadeLuma * shadeLuma;
+    }
     // Edge lighting — uses the true normal.xy (V1; was normalize(displacement))
     // The 40.0 constant was calibrated on a 3x Retina display.
     // We scale it by uEdgeConfig.z (which contains devicePixelRatio / 3.0) 
@@ -712,7 +740,10 @@ void main() {
     float absorption = 1.0 - sqrt(rimThickness) * uEdgeConfig.w * dirScale;
     finalColor.rgb *= max(0.0, absorption);
 
-    if (edgeFactor > 0.01) {
+    // With no light and no ambient term the block below mixes by 0 (the touch
+    // glint also scales by uLightIntensity), so skip it: the iOS 27 presets
+    // set lightIntensity to 0.
+    if (edgeFactor > 0.01 && (uLightIntensity > 0.0 || uAmbientStrength > 0.0)) {
         // Re-normalize the bilinearly interpolated normal.
         // Interpolating normals across pixels shrinks their magnitude (the 'chord' effect).
         // If we don't re-normalize, this magnitude oscillation causes severe flickering

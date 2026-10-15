@@ -1,5 +1,7 @@
-/// Local bypass is mandatory, independent of optional geographic/custom rules.
+/// Local routing takes precedence over geographic/custom rules.
 abstract final class WindowsRoutingPolicy {
+  static bool bypassLocal(Map<String, Object?> settings) =>
+      settings['localBypassMode'] != 'proxy';
   static const localCidrs = <String>[
     '10.0.0.0/8',
     '100.64.0.0/10',

@@ -6,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/diagnostics.dart';
+import '../../core/startup_trace.dart';
+import '../../core/platform/nirang_native.dart';
+import '../../core/render_mode.dart';
 import '../../core/desktop_feedback.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
@@ -14,9 +17,10 @@ import '../../core/update_checker.dart';
 import '../../core/windows_release_state.dart';
 import '../../core/windows_update_manager.dart';
 import '../../core/widgets/glass_dialog.dart';
-import '../../core/widgets/interactive_depth.dart';
-import '../../core/widgets/brand_mark.dart';
+import '../../core/widgets/navigation_dock.dart';
 import '../../core/widgets/glass_surface.dart';
+import '../../core/widgets/brand_mark.dart';
+import '../../core/widgets/startup_loading.dart';
 import '../../core/widgets/snapshot_glass.dart';
 import '../../core/widgets/operation_error.dart';
 import '../../core/widgets/niran_toast.dart';
@@ -28,7 +32,8 @@ import 'app_controller.dart';
 import 'home_screen.dart';
 
 class AppShell extends ConsumerStatefulWidget {
-  const AppShell({super.key});
+  const AppShell({super.key, this.prepareSnapshot = warmSnapshotGlass});
+  final Future<FragmentProgram?> Function() prepareSnapshot;
 
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
@@ -38,19 +43,30 @@ class _AppShellState extends ConsumerState<AppShell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pageMotion;
   final GlobalKey _glassBoundaryKey = GlobalKey();
+  final GlobalKey _pagesKey = GlobalKey();
+  String? _navigationPreview;
   static Future<ReleaseCheckResult?>? _startupUpdateOperation;
   int _index = 0;
+  final _visitedPages = <int>{0};
   bool _reminderQueued = false;
   bool _successfulPingSinceConnect = false;
   bool _startupUpdateQueued = false;
   bool _whatsNewQueued = false;
   late UpdateDownloadStatus _lastUpdateStatus;
   bool _installPromptQueued = false;
+  bool _homeFrameReported = false;
+  bool _startupTimingsAttached = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(warmSnapshotGlass());
+    if (!NirangNative.startupUiReadiness.isReady) {
+      WidgetsBinding.instance.addTimingsCallback(_recordStartupTimings);
+      _startupTimingsAttached = true;
+    }
+    if (!ref.read(performanceModeProvider)) {
+      unawaited(widget.prepareSnapshot());
+    }
     _pageMotion = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 180),
@@ -63,9 +79,24 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
+    _stopStartupTimings();
     _pageMotion.dispose();
     WindowsUpdateManager.instance.removeListener(_handleUpdateDownload);
     super.dispose();
+  }
+
+  void _recordStartupTimings(List<FrameTiming> timings) {
+    NirangNative.startupUiReadiness.recordTimings(timings);
+    if (NirangNative.startupUiReadiness.isReady) {
+      StartupTrace.mark(StartupPhase.homeRasterReady);
+      _stopStartupTimings();
+    }
+  }
+
+  void _stopStartupTimings() {
+    if (!_startupTimingsAttached) return;
+    _startupTimingsAttached = false;
+    WidgetsBinding.instance.removeTimingsCallback(_recordStartupTimings);
   }
 
   void _handleUpdateDownload() {
@@ -132,7 +163,8 @@ class _AppShellState extends ConsumerState<AppShell>
           ready: value.asData != null,
           loading: value.isLoading,
           error: value.hasError ? value.error : null,
-          sidebarRight: value.asData?.value.settings.sidebarRight ?? false,
+          navigationPosition:
+              value.asData?.value.settings.resolvedNavigationPosition ?? 'left',
         ),
       ),
     );
@@ -183,7 +215,7 @@ class _AppShellState extends ConsumerState<AppShell>
     });
 
     if (!shellState.ready && shellState.loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const StartupLoadingScreen(stage: StartupStage.settings);
     }
     if (!shellState.ready) {
       return Scaffold(
@@ -223,14 +255,31 @@ class _AppShellState extends ConsumerState<AppShell>
       );
     }
 
-    const pages = [
-      HomeScreen(),
-      ServersScreen(),
+    if (!_homeFrameReported) {
+      _homeFrameReported = true;
+      StartupTrace.mark(StartupPhase.homeBuildRequested);
+      NirangNative.startupUiReadiness.expectFrame(
+        PlatformDispatcher.instance.frameData.frameNumber + 1,
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        StartupTrace.mark(StartupPhase.homeFramePresented);
+        // Require a fresh engine frame, not a buffered loader/warm-up report.
+        WidgetsBinding.instance.scheduleFrame();
+      });
+    }
+    final pages = [
+      HomeScreen(
+        onNavigationPreviewChanged: (position) {
+          if (mounted) setState(() => _navigationPreview = position);
+        },
+      ),
+      const ServersScreen(),
       SettingsScreen(topInset: kToolbarHeight),
-      LogsScreen(),
+      const LogsScreen(),
     ];
     final theme = Theme.of(context);
-    const reducedEffects = false;
+    final reducedEffects = ref.watch(performanceModeProvider);
     void selectDestination(int value) {
       if (_index == value) return;
       NirangDiagnostics.currentFeature = const [
@@ -239,7 +288,10 @@ class _AppShellState extends ConsumerState<AppShell>
         'settings',
         'logs',
       ][value];
-      setState(() => _index = value);
+      setState(() {
+        _visitedPages.add(value);
+        _index = value;
+      });
       unawaited(
         DesktopFeedback.show(
           style:
@@ -260,7 +312,7 @@ class _AppShellState extends ConsumerState<AppShell>
               true,
         ),
       );
-      if (reducedEffects || MediaQuery.disableAnimationsOf(context)) {
+      if (MediaQuery.disableAnimationsOf(context)) {
         _pageMotion.value = 1;
       } else {
         _pageMotion.forward(from: 0);
@@ -292,16 +344,6 @@ class _AppShellState extends ConsumerState<AppShell>
         label: context.s('logs'),
       ),
     ];
-    final navigationBar = NavigationBar(
-      backgroundColor: NirangVisualEffects.chromeColor(
-        theme,
-        reducedEffects: reducedEffects,
-        darkAlpha: .68,
-      ),
-      selectedIndex: _index,
-      onDestinationSelected: selectDestination,
-      destinations: destinations,
-    );
     final controller = ref.read(appControllerProvider.notifier);
     final connection = ref.watch(
       appControllerProvider.select(
@@ -333,15 +375,50 @@ class _AppShellState extends ConsumerState<AppShell>
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final desktopLayout = constraints.maxWidth >= 900;
+                  final position = desktopLayout
+                      ? _navigationPreview ?? shellState.navigationPosition
+                      : 'bottom';
+                  final sideNavigation =
+                      position == 'left' || position == 'right';
+                  final horizontalNavigation = Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: Center(
+                      heightFactor: 1,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 620),
+                        child: GlassSurface(
+                          radius: 28,
+                          blur: 18,
+                          liveLiquid: true,
+                          child: NavigationDock(
+                            destinations: destinations,
+                            selectedIndex: _index,
+                            onSelected: selectDestination,
+                            vertical: false,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
                   final body = AnimatedBuilder(
                     animation: _pageMotion,
                     child: IndexedStack(
+                      key: _pagesKey,
                       index: _index,
                       children: [
                         for (var i = 0; i < pages.length; i++)
                           TickerMode(
                             enabled: _index == i,
-                            child: RepaintBoundary(child: pages[i]),
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                top: i == 2 ? 0 : kToolbarHeight,
+                              ),
+                              child: RepaintBoundary(
+                                child: _visitedPages.contains(i)
+                                    ? pages[i]
+                                    : const SizedBox.shrink(),
+                              ),
+                            ),
                           ),
                       ],
                     ),
@@ -355,38 +432,46 @@ class _AppShellState extends ConsumerState<AppShell>
                     ),
                   );
                   return Scaffold(
-                    extendBodyBehindAppBar: _index == 2,
+                    extendBodyBehindAppBar: true,
+                    extendBody: position == 'bottom',
                     backgroundColor: Colors.transparent,
                     appBar: AppBar(
                       backgroundColor: Colors.transparent,
                       surfaceTintColor: Colors.transparent,
                       elevation: 0,
                       scrolledUnderElevation: 0,
-                      flexibleSpace: ClipRect(
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(
-                            sigmaX: NirangVisualEffects.chromeBlur(theme, 12),
-                            sigmaY: NirangVisualEffects.chromeBlur(theme, 12),
-                          ),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surface.withValues(
-                                alpha: theme.brightness == Brightness.dark
-                                    ? .10
-                                    : .32,
-                              ),
-                              border: Border(
-                                bottom: BorderSide(
-                                  color: theme.colorScheme.outline.withValues(
-                                    alpha: .12,
+                      flexibleSpace: reducedEffects
+                          ? const LightweightHeader()
+                          : ClipRect(
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                  sigmaX: NirangVisualEffects.chromeBlur(
+                                    theme,
+                                    12,
                                   ),
+                                  sigmaY: NirangVisualEffects.chromeBlur(
+                                    theme,
+                                    12,
+                                  ),
+                                ),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.surface.withValues(
+                                      alpha: theme.brightness == Brightness.dark
+                                          ? .10
+                                          : .32,
+                                    ),
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: theme.colorScheme.outline
+                                            .withValues(alpha: .12),
+                                      ),
+                                    ),
+                                  ),
+                                  child: const SizedBox.expand(),
                                 ),
                               ),
                             ),
-                            child: const SizedBox.expand(),
-                          ),
-                        ),
-                      ),
                       title: Row(
                         children: [
                           const BrandMark(),
@@ -395,51 +480,28 @@ class _AppShellState extends ConsumerState<AppShell>
                         ],
                       ),
                     ),
-                    body: desktopLayout
+                    body: sideNavigation
                         ? Row(
-                            textDirection: shellState.sidebarRight
+                            textDirection: position == 'right'
                                 ? TextDirection.rtl
                                 : TextDirection.ltr,
                             children: [
                               Padding(
                                 padding: EdgeInsets.fromLTRB(
                                   12,
-                                  _index == 2 ? kToolbarHeight + 8 : 8,
+                                  kToolbarHeight + 8,
                                   8,
                                   16,
                                 ),
                                 child: GlassSurface(
                                   radius: 24,
                                   blur: 18,
-                                  child: NavigationRail(
-                                    minWidth: 94,
+                                  liveLiquid: true,
+                                  child: NavigationDock(
+                                    vertical: true,
                                     selectedIndex: _index,
-                                    onDestinationSelected: selectDestination,
-                                    labelType: NavigationRailLabelType.all,
-                                    groupAlignment: -.80,
-                                    backgroundColor: Colors.transparent,
-                                    destinations: [
-                                      for (final destination in destinations)
-                                        NavigationRailDestination(
-                                          icon: InteractiveDepth(
-                                            reducedEffects: reducedEffects,
-                                            child: Padding(
-                                              padding: const EdgeInsets.all(3),
-                                              child: destination.icon,
-                                            ),
-                                          ),
-                                          selectedIcon: InteractiveDepth(
-                                            reducedEffects: reducedEffects,
-                                            child: Padding(
-                                              padding: const EdgeInsets.all(3),
-                                              child:
-                                                  destination.selectedIcon ??
-                                                  destination.icon,
-                                            ),
-                                          ),
-                                          label: Text(destination.label),
-                                        ),
-                                    ],
+                                    onSelected: selectDestination,
+                                    destinations: destinations,
                                   ),
                                 ),
                               ),
@@ -456,23 +518,9 @@ class _AppShellState extends ConsumerState<AppShell>
                             ],
                           )
                         : body,
-                    bottomNavigationBar: desktopLayout
-                        ? null
-                        : ClipRect(
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(
-                                sigmaX: NirangVisualEffects.chromeBlur(
-                                  theme,
-                                  14,
-                                ),
-                                sigmaY: NirangVisualEffects.chromeBlur(
-                                  theme,
-                                  14,
-                                ),
-                              ),
-                              child: navigationBar,
-                            ),
-                          ),
+                    bottomNavigationBar: position == 'bottom'
+                        ? horizontalNavigation
+                        : null,
                   );
                 },
               ),
@@ -488,6 +536,8 @@ class _AppShellState extends ConsumerState<AppShell>
     String language,
   ) async {
     if (!mounted || currentVersion.isEmpty) return;
+    await NirangNative.startupUiReadiness.ready;
+    if (!mounted) return;
     await WindowsUpdateManager.instance.initialize(currentVersion);
     // Release notes are an installed-version lifecycle concern, not a GitHub
     // update-check side effect. Resolve them first so an optional update
@@ -551,7 +601,10 @@ class _AppShellState extends ConsumerState<AppShell>
         await updateManager.start(updateAsset, release.latestVersion);
         if (!mounted) return;
         NirangDiagnostics.currentFeature = 'settings';
-        setState(() => _index = 2);
+        setState(() {
+          _visitedPages.add(2);
+          _index = 2;
+        });
         updateManager.requestManagerFocus();
       } else if (action == 'install') {
         final mustExit = await updateManager.launch();

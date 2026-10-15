@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import 'liquid_glass_rim.dart';
+
 /// A modal owns this image until its route has finished its reverse transition.
 /// No pixels leave the process and no image is captured during repaint.
 class GlassSnapshot {
@@ -187,10 +189,13 @@ Future<ui.Image> _rasterWarmupPicture(
 }
 
 /// Compile/load once; each surface keeps its own mutable shader uniforms.
-Future<ui.FragmentProgram?> warmSnapshotGlass() => _program ??=
-    ui.FragmentProgram.fromAsset('shaders/desktop_liquid_glass.frag')
-        .then<ui.FragmentProgram?>((value) => _loadedProgram = value)
-        .catchError((Object _) => null);
+Future<ui.FragmentProgram?> warmSnapshotGlass() => _program ??= () async {
+  final lens = ui.FragmentProgram.fromAsset('shaders/desktop_liquid_glass.frag')
+      .then<ui.FragmentProgram?>((value) => _loadedProgram = value)
+      .catchError((Object _) => null);
+  await warmLiquidGlassRim();
+  return lens;
+}();
 
 /// Wait for a painted background before opening a modal. The frame wait also
 /// works in release, where Flutter exposes no public repaint-dirty flag.
@@ -206,7 +211,7 @@ Future<GlassSnapshot?> prepareGlassSnapshot(
   if (!context.mounted || sourceKey.currentContext == null) return null;
   final snapshot = await captureGlassSnapshot(
     sourceKey,
-    blur: 16,
+    blur: 18,
     region: region,
   );
   if (!context.mounted || sourceKey.currentContext == null) {

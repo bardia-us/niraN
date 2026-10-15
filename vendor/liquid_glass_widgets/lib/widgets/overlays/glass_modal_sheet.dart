@@ -18,8 +18,10 @@ import '../shared/adaptive_glass.dart';
 import '../shared/adaptive_liquid_glass_layer.dart';
 import '../../types/interaction_notification.dart';
 import '../../src/widgets/overlays/glass_sheet_defaults.dart';
+import '../../src/widgets/surfaces/vertical_bar_title_row.dart';
 import '../../constants/glass_defaults.dart';
 import '../shared/glass_accessibility_scope.dart';
+import '../surfaces/glass_vertical_bar.dart';
 
 part 'shared/glass_modal_sheet_mechanics.dart';
 part 'shared/glass_modal_sheet_internal.dart';
@@ -91,7 +93,17 @@ class GlassModalSheet extends StatefulWidget {
   final double? peekBottomRadius;
 
   /// Horizontal padding between the sheet and the screen edges.
+  ///
+  /// The sheet runs edge to edge at its large detent, except in iPhone Duo's
+  /// vertical bar strip layout, where natively it keeps its margins there too.
   final double horizontalMargin;
+
+  /// Where the sheet sits across a screen with room beside it, mirroring
+  /// SwiftUI's `presentationPlacement(_:)`.
+  ///
+  /// Only read in iPhone Duo's vertical bar strip layout; see
+  /// [GlassSheetPlacement].
+  final GlassSheetPlacement placement;
 
   /// Horizontal padding specifically for the 'peek' state.
   /// If null, [horizontalMargin] is used.
@@ -119,6 +131,12 @@ class GlassModalSheet extends StatefulWidget {
 
   /// Background color used when the sheet is fully expanded and opaque.
   final Color? expandedColor;
+
+  /// [expandedColor] while [GlassTheme.brightnessOf] is dark.
+  ///
+  /// Picked on every build, so an open sheet follows a light/dark switch.
+  /// Falls back to [expandedColor].
+  final Color? expandedDarkColor;
 
   /// Rendering quality (BackdropFilter vs Shader). Defaults to standard.
   final GlassQuality? quality;
@@ -267,6 +285,7 @@ class GlassModalSheet extends StatefulWidget {
     this.quality,
     this.platformViewBackdrop = false,
     this.expandedColor,
+    this.expandedDarkColor,
     this.controller,
     this.onStateChanged,
     this.mode = GlassSheetMode.dismissible,
@@ -292,10 +311,46 @@ class GlassModalSheet extends StatefulWidget {
     this.peekWidth,
     this.peekTopBorderRadius,
     this.peekBottomRadius,
+    this.placement = GlassSheetPlacement.automatic,
   }) : assert(
             detents.length > 0,
             'GlassModalSheet needs at least one detent — add medium and/or large '
             '(small alone is a floor, not a resting height).');
+
+  /// The width a sheet presented from [context] rests at, at [state].
+  ///
+  /// For a sheet that sizes itself to content measured before it is presented:
+  /// measure at this width, or wrapping content gains a row the sheet's height
+  /// does not allow for. Pass the [placement] and [horizontalMargin] the sheet
+  /// is presented with; at [GlassSheetState.peek], pass its
+  /// `peekHorizontalMargin` as [horizontalMargin] where it has one; one with
+  /// a `peekWidth` rests at that instead.
+  ///
+  /// The screen's width less [horizontalMargin] on each side, and at
+  /// [GlassSheetState.full] the whole width. In iPhone Duo's vertical bar strip
+  /// layout the sheet keeps its margins at every detent, and in a window
+  /// 800pt wide or more it is a card no wider than the display's shorter side.
+  static double restingWidthOf(
+    BuildContext context, {
+    GlassSheetState state = GlassSheetState.half,
+    GlassSheetPlacement placement = GlassSheetPlacement.automatic,
+    double horizontalMargin = 8.0,
+  }) {
+    final size = MediaQuery.sizeOf(context);
+    if (GlassVerticalBar.maybeOf(context) == null) {
+      return state == GlassSheetState.full
+          ? size.width
+          : size.width - 2 * horizontalMargin;
+    }
+    return size.width -
+        _stripSheetInsets(
+          screenSize: size,
+          regularWidth: VerticalBarTitleRow.regularWidth(context),
+          margin: horizontalMargin,
+          placement: placement,
+          textDirection: Directionality.of(context),
+        ).horizontal;
+  }
 
   /// Shows a high-fidelity glass modal sheet.
   ///
@@ -363,6 +418,7 @@ class GlassModalSheet extends StatefulWidget {
     double fillThreshold = 0.60,
     LiquidGlassSettings? settings,
     Color? expandedColor,
+    Color? expandedDarkColor,
     ValueChanged<GlassSheetState>? onStateChanged,
     GlassSheetMode mode = GlassSheetMode.dismissible,
     double peekSize = 90.0,
@@ -412,6 +468,7 @@ class GlassModalSheet extends StatefulWidget {
     double? peekWidth,
     double? peekTopBorderRadius,
     double? peekBottomRadius,
+    GlassSheetPlacement placement = GlassSheetPlacement.automatic,
     GlassMorphAnchor? morphFrom,
     Rect? morphFromRect,
     MorphSpeed morphSpeed = MorphSpeed.normal,
@@ -506,6 +563,7 @@ class GlassModalSheet extends StatefulWidget {
           fillThreshold: fillThreshold,
           settings: settings,
           expandedColor: expandedColor,
+          expandedDarkColor: expandedDarkColor,
           mode: mode,
           peekSize: peekSize,
           quality: quality,
@@ -547,6 +605,7 @@ class GlassModalSheet extends StatefulWidget {
           peekWidth: peekWidth,
           peekTopBorderRadius: peekTopBorderRadius,
           peekBottomRadius: peekBottomRadius,
+          placement: placement,
           onStateChanged: (state) {
             onStateChanged?.call(state);
             if (state == GlassSheetState.hidden && !isClosing) {
@@ -572,7 +631,7 @@ class GlassModalSheet extends StatefulWidget {
           geometry: SheetGeometry(
             mode: mode,
             halfSize: halfSize,
-            fullSize: fullSize,
+            fullSize: fullSize ?? _stripFullSize(context),
             peekSize: peekSize,
             enablePeek: SheetGeometry.resolvePeek(
               detents: detents,
@@ -593,6 +652,7 @@ class GlassModalSheet extends StatefulWidget {
           halfSettings: halfSettings,
           fullSettings: fullSettings,
           expandedColor: expandedColor,
+          expandedDarkColor: expandedDarkColor,
           quality: quality,
           peekHorizontalMargin: peekHorizontalMargin,
           peekBottomMargin: peekBottomMargin,
@@ -602,6 +662,7 @@ class GlassModalSheet extends StatefulWidget {
           // The route-level barrier is transparent above; the presenter drives
           // the scrim itself via the liquid spring for single-unified-motion.
           barrierColor: barrierColor,
+          placement: placement,
           child: scaffold,
         );
       },
@@ -666,6 +727,16 @@ class GlassModalSheet extends StatefulWidget {
   /// stay honest under the override.
   @visibleForTesting
   static bool? debugMorphSupportsBlending;
+
+  /// The large detent's height in iPhone Duo's vertical bar strip layout, or
+  /// null elsewhere, where [fullSize]'s default applies.
+  ///
+  /// The status bar is in the strip there, so natively a sheet rises to 8pt
+  /// from the top of the screen instead of stopping short of the status bar.
+  static double? _stripFullSize(BuildContext context) =>
+      GlassVerticalBar.maybeOf(context) == null
+          ? null
+          : MediaQuery.sizeOf(context).height - _kStripSheetTop;
 
   /// Route transition duration that covers a morph at [speed].
   ///

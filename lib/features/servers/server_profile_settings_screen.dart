@@ -6,6 +6,11 @@ import 'package:flutter/services.dart';
 import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/widgets/operation_error.dart';
+import '../../core/widgets/niran_toast.dart';
+import '../../core/widgets/profile_choice_field.dart';
+import '../../core/widgets/detail_page_header.dart';
+import '../../core/widgets/clay_surface.dart';
+import '../../core/widgets/interactive_depth.dart';
 import '../vpn/app_controller.dart';
 
 class ServerProfileSettingsScreen extends StatefulWidget {
@@ -30,6 +35,23 @@ class _ServerProfileSettingsScreenState
   late final TextEditingController _fingerprint;
   late final TextEditingController _cipherSuites;
   late final TextEditingController _finalMask;
+  late final TextEditingController _sni;
+  late final TextEditingController _ech;
+  String _alpn = '';
+  static const fingerprints = [
+    '',
+    'chrome',
+    'firefox',
+    'safari',
+    'ios',
+    'android',
+    'edge',
+    '360',
+    'qq',
+    'random',
+    'randomized',
+    'unsafe',
+  ];
   bool _saving = false;
   String? _finalMaskError;
   String? _fingerprintError;
@@ -42,6 +64,9 @@ class _ServerProfileSettingsScreenState
     _fingerprint = TextEditingController(text: widget.server.fingerprint);
     _cipherSuites = TextEditingController(text: widget.server.cipherSuites);
     _finalMask = TextEditingController(text: widget.server.finalMask);
+    _sni = TextEditingController(text: widget.server.sni);
+    _ech = TextEditingController(text: widget.server.echConfigList);
+    _alpn = widget.server.alpn;
   }
 
   @override
@@ -49,6 +74,8 @@ class _ServerProfileSettingsScreenState
     _fingerprint.dispose();
     _cipherSuites.dispose();
     _finalMask.dispose();
+    _sni.dispose();
+    _ech.dispose();
     super.dispose();
   }
 
@@ -83,12 +110,13 @@ class _ServerProfileSettingsScreenState
         // Reality editor does not expose instead of clearing subscription data.
         'cs': _isReality ? widget.server.cipherSuites : _cipherSuites.text,
         'fm': _isReality ? widget.server.finalMask : _finalMask.text,
+        'sni': _sni.text,
+        if (!_isReality) 'alpn': _alpn,
+        if (!_isReality) 'echConfigList': _ech.text,
       });
       if (mounted) {
         if (widget.embedded) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(context.s('save'))));
+          showNiranToast(context, context.s('save'));
         } else {
           Navigator.pop(context);
         }
@@ -106,9 +134,11 @@ class _ServerProfileSettingsScreenState
     );
     await Clipboard.setData(ClipboardData(text: link));
     if (mounted) {
-      ScaffoldMessenger.of(
+      showNiranToast(
         context,
-      ).showSnackBar(SnackBar(content: Text(context.s('shareLinkCopied'))));
+        context.s('shareLinkCopied'),
+        icon: Icons.copy_rounded,
+      );
     }
   }
 
@@ -126,21 +156,48 @@ class _ServerProfileSettingsScreenState
         const SizedBox(height: 14),
       ],
       TextField(
-        controller: _fingerprint,
-        onChanged: (_) {
-          if (_fingerprintError != null) {
-            setState(() => _fingerprintError = null);
-          }
+        controller: _sni,
+        decoration: const InputDecoration(labelText: 'Server name (SNI)'),
+      ),
+      const SizedBox(height: 14),
+      ProfileChoiceField(
+        key: const Key('profile-fingerprint'),
+        label: context.s('fingerprint'),
+        errorText: _fingerprintError,
+        value: _isReality && _fingerprint.text == 'unsafe'
+            ? ''
+            : _fingerprint.text,
+        values: {
+          ...fingerprints.where((value) => !_isReality || value != 'unsafe'),
+          if (!fingerprints.contains(_fingerprint.text) &&
+              _fingerprint.text.isNotEmpty)
+            _fingerprint.text,
         },
-        decoration: InputDecoration(
-          labelText: context.s('fingerprint'),
-          helperText: _isReality
-              ? 'chrome, firefox, safari, edge, random'
-              : 'chrome, firefox, safari, edge, random, unsafe',
-          errorText: _fingerprintError,
-        ),
+        onChanged: _saving
+            ? null
+            : (value) => setState(() {
+                _fingerprint.text = value;
+                _fingerprintError = null;
+              }),
       ),
       if (!_isReality) ...[
+        const SizedBox(height: 14),
+        ProfileChoiceField(
+          key: const Key('profile-alpn'),
+          value: _alpn,
+          label: 'ALPN',
+          values: {'', 'h2', 'http/1.1', 'h2,http/1.1', _alpn},
+          onChanged: _saving ? null : (value) => setState(() => _alpn = value),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _ech,
+          textDirection: TextDirection.ltr,
+          decoration: const InputDecoration(
+            labelText: 'ECH Config List',
+            helperText: 'Base64 / udp://resolver / domain+udp://resolver',
+          ),
+        ),
         const SizedBox(height: 14),
         TextField(
           controller: _cipherSuites,
@@ -153,6 +210,7 @@ class _ServerProfileSettingsScreenState
         const SizedBox(height: 14),
         TextField(
           controller: _finalMask,
+          key: const Key('profile-finalmask'),
           minLines: 7,
           maxLines: 16,
           textDirection: TextDirection.ltr,
@@ -186,20 +244,37 @@ class _ServerProfileSettingsScreenState
         spacing: 10,
         runSpacing: 8,
         children: [
-          TextButton.icon(
-            onPressed: _copyShareLink,
-            icon: const Icon(Icons.copy_rounded),
-            label: Text(context.s('copyShareLink')),
+          InteractiveDepth(
+            tiltEnabled: false,
+            hoverLift: 2,
+            radius: 20,
+            child: ClaySurface(
+              radius: 20,
+              child: TextButton.icon(
+                onPressed: _copyShareLink,
+                icon: const Icon(Icons.copy_rounded),
+                label: Text(context.s('copyShareLink')),
+              ),
+            ),
           ),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_rounded),
-            label: Text(context.s('save')),
+          InteractiveDepth(
+            tiltEnabled: false,
+            hoverLift: 2,
+            radius: 20,
+            child: ClaySurface(
+              radius: 20,
+              selected: true,
+              child: TextButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_rounded),
+                label: Text(context.s('save')),
+              ),
+            ),
           ),
         ],
       ),
@@ -212,11 +287,20 @@ class _ServerProfileSettingsScreenState
               children: fields,
             ),
           )
-        : ListView(padding: const EdgeInsets.all(18), children: fields);
+        : ListView(
+            padding: EdgeInsets.fromLTRB(
+              18,
+              kToolbarHeight + MediaQuery.paddingOf(context).top + 18,
+              18,
+              18,
+            ),
+            children: fields,
+          );
     return widget.embedded
         ? editor
         : Scaffold(
-            appBar: AppBar(title: Text(context.s('profileTlsSettings'))),
+            extendBodyBehindAppBar: true,
+            appBar: DetailPageHeader(title: context.s('profileTlsSettings')),
             body: editor,
           );
   }

@@ -79,10 +79,10 @@ final class HomeLayout {
   HomePlacement operator [](String id) => placements[id]!;
 
   factory HomeLayout.defaults() => HomeLayout._({
-    'status': const HomePlacement(x: 0, y: 0, width: 76, height: 84),
-    'subscription': const HomePlacement(x: 78, y: 0, width: 42, height: 28),
-    'traffic': const HomePlacement(x: 78, y: 32, width: 42, height: 44),
-    'logs': const HomePlacement(x: 0, y: 88, width: 76, height: 32),
+    'status': const HomePlacement(x: 0, y: 0, width: 78, height: 87),
+    'subscription': const HomePlacement(x: 78, y: 0, width: 42, height: 31),
+    'traffic': const HomePlacement(x: 78, y: 32, width: 42, height: 51),
+    'logs': const HomePlacement(x: 0, y: 88, width: 78, height: 32),
     'systemProxy': const HomePlacement(x: 0, y: 18, width: 37, height: 14),
     'clearProxy': const HomePlacement(x: 40, y: 18, width: 37, height: 14),
     'tun': const HomePlacement(x: 80, y: 18, width: 40, height: 14),
@@ -101,7 +101,7 @@ final class HomeLayout {
         migrated[id] = migrated[id]!.copyWith(x: 0);
       }
       for (final id in const ['status', 'logs']) {
-        migrated[id] = migrated[id]!.copyWith(x: 44);
+        migrated[id] = migrated[id]!.copyWith(x: columns - migrated[id]!.width);
       }
     }
     final order = settings.orderedHomeControls;
@@ -198,11 +198,14 @@ final class HomeLayout {
         // Upgrade only the old factory surface arrangement, never a manual
         // resize/move. v3 makes this a one-time migration rather than undoing
         // a later deliberate resize back to the old width.
-        final standard = HomeLayout.defaults();
+        const standard = {
+          'status': HomePlacement(x: 0, y: 0, width: 76, height: 84),
+          'subscription': HomePlacement(x: 78, y: 0, width: 42, height: 28),
+          'traffic': HomePlacement(x: 78, y: 32, width: 42, height: 44),
+          'logs': HomePlacement(x: 0, y: 88, width: 68, height: 32),
+        };
         final isPreviousStandard = surfaceIds.every((id) {
-          final expected = id == 'logs'
-              ? standard[id].copyWith(width: 68)
-              : standard[id];
+          final expected = standard[id]!;
           final actual = layout[id];
           return actual.x == expected.x &&
               actual.y == expected.y &&
@@ -210,7 +213,10 @@ final class HomeLayout {
               actual.height == expected.height;
         });
         if (isPreviousStandard) {
-          return HomeLayout._({...placements, 'logs': standard['logs']});
+          return HomeLayout._({
+            ...placements,
+            'logs': layout['logs'].copyWith(width: 76),
+          });
         }
       }
       return HomeLayout._(placements);

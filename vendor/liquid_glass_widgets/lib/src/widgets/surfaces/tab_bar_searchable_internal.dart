@@ -14,6 +14,7 @@ import '../../../constants/glass_defaults.dart';
 import '../../renderer/liquid_glass_renderer.dart';
 import '../../../types/glass_quality.dart';
 import '../../../utils/draggable_indicator_physics.dart';
+import '../../utils/glass_localizations.dart';
 import '../../../utils/glass_spring.dart';
 import '../../../theme/glass_theme.dart';
 import '../../../widgets/interactive/glass_button.dart';
@@ -48,6 +49,7 @@ class DismissPill extends StatelessWidget {
     this.cancelIconSize = 24,
     this.indicatorColor,
     this.settings,
+    this.semanticLabel,
     super.key,
   });
 
@@ -61,6 +63,9 @@ class DismissPill extends StatelessWidget {
   final Color? indicatorColor;
   final LiquidGlassSettings? settings;
 
+  /// Screen reader label; defaults to the app's Cupertino "Cancel".
+  final String? semanticLabel;
+
   @override
   Widget build(BuildContext context) {
     final safeColor = indicatorColor;
@@ -69,6 +74,8 @@ class DismissPill extends StatelessWidget {
         isDark ? const Color(0xE6FFFFFF) : const Color(0xE6000000);
     return GlassButton(
       onTap: onTap,
+      label: semanticLabel ??
+          glassCupertinoLocalizationsOf(context).cancelButtonLabel,
       width: pillSize,
       height: pillSize,
       quality: quality,
@@ -137,6 +144,7 @@ class SearchableTabIndicator extends StatefulWidget {
     required this.enableBackgroundAnimation,
     required this.backgroundPressScale,
     this.platformViewBackdrop = false,
+    this.collapsedSemanticLabel,
     super.key,
   });
 
@@ -176,6 +184,10 @@ class SearchableTabIndicator extends StatefulWidget {
   final bool isSearchActive;
   final VoidCallback onDismissSearch;
   final WidgetBuilder? collapsedLogoBuilder;
+
+  /// Screen reader label of the collapsed circle that leaves search and
+  /// returns to the tabs: the current tab's name.
+  final String? collapsedSemanticLabel;
 
   /// How far the jelly indicator's leading and trailing edges expand
   /// past the tab boundary as the indicator translates. Higher values
@@ -274,16 +286,25 @@ class SearchableTabIndicatorState extends State<SearchableTabIndicator>
             stretch: widget.platformViewBackdrop ? 0.0 : 0.5,
             resistance: 0.01,
             anchorStretch: true,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
+            // The collapsed circle is the way back to the tabs: a button
+            // named after the current tab. The logo inside is decoration.
+            child: Semantics(
+              container: true,
+              button: true,
+              label: widget.collapsedSemanticLabel,
               onTap: widget.onDismissSearch,
-              child: AdaptiveGlass.grouped(
-                quality: widget.backgroundQuality ?? widget.quality,
-                platformViewBackdrop: widget.platformViewBackdrop,
-                shape: currentShape,
-                child: (nativePress && widget.nativePressHighlight)
-                    ? PressAmbientLift(child: content)
-                    : _wrapWithGlow(child: content),
+              excludeSemantics: widget.collapsedSemanticLabel != null,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: widget.onDismissSearch,
+                child: AdaptiveGlass.grouped(
+                  quality: widget.backgroundQuality ?? widget.quality,
+                  platformViewBackdrop: widget.platformViewBackdrop,
+                  shape: currentShape,
+                  child: (nativePress && widget.nativePressHighlight)
+                      ? PressAmbientLift(child: content)
+                      : _wrapWithGlow(child: content),
+                ),
               ),
             ),
           );
@@ -1011,28 +1032,35 @@ class SearchPillState extends State<SearchPill> {
                 resistance: 0.01,
                 anchorStretch:
                     true, // Matches GlassButton default (keeps it attached so it morphs)
-                child: GestureDetector(
-                  key: const ValueKey('pill-collapsed'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: (widget.isActive && widget.config.expandWhenActive)
-                      ? () {}
-                      : () => widget.config.onSearchToggle(true),
-                  child: AdaptiveGlass.grouped(
-                    shape: currentShape,
-                    // Over a PlatformView AdaptiveGlass routes to the frost veil
-                    // automatically (platformViewBackdrop), so the requested
-                    // quality passes through unchanged here.
-                    quality: widget.quality,
-                    platformViewBackdrop: widget.platformViewBackdrop,
-                    child: _pressHighlight(
-                      child: Center(
-                        // IconTheme ensures custom searchIcon widgets inherit
-                        // the resolved color. The fallback Icon also sets
-                        // color: explicitly for belt-and-braces safety.
-                        child: IconTheme(
-                          data: IconThemeData(color: iconColor),
-                          child: widget.config.searchIcon ??
-                              Icon(CupertinoIcons.search, color: iconColor),
+                // The collapsed circle opens search: a button named by the
+                // field's own hint text, which the app already localizes.
+                child: Semantics(
+                  container: true,
+                  button: true,
+                  label: widget.config.hintText,
+                  child: GestureDetector(
+                    key: const ValueKey('pill-collapsed'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: (widget.isActive && widget.config.expandWhenActive)
+                        ? () {}
+                        : () => widget.config.onSearchToggle(true),
+                    child: AdaptiveGlass.grouped(
+                      shape: currentShape,
+                      // Over a PlatformView AdaptiveGlass routes to the frost veil
+                      // automatically (platformViewBackdrop), so the requested
+                      // quality passes through unchanged here.
+                      quality: widget.quality,
+                      platformViewBackdrop: widget.platformViewBackdrop,
+                      child: _pressHighlight(
+                        child: Center(
+                          // IconTheme ensures custom searchIcon widgets inherit
+                          // the resolved color. The fallback Icon also sets
+                          // color: explicitly for belt-and-braces safety.
+                          child: IconTheme(
+                            data: IconThemeData(color: iconColor),
+                            child: widget.config.searchIcon ??
+                                Icon(CupertinoIcons.search, color: iconColor),
+                          ),
                         ),
                       ),
                     ),
@@ -1083,6 +1111,9 @@ class SearchPillState extends State<SearchPill> {
           anchorStretch: false, // Search pill uses jelly-follow, not anchored
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // Only widens the pointer target to the padding; the text field
+            // inside is the control screen readers use.
+            excludeFromSemantics: true,
             onTap: _focusNode.requestFocus,
             child: AdaptiveGlass.grouped(
               shape: shape,
@@ -1169,27 +1200,40 @@ class SearchPillState extends State<SearchPill> {
           child: ScaleTransition(scale: animation, child: child),
         ),
         child: _hasText
-            ? GestureDetector(
+            ? Semantics(
                 key: const ValueKey('clear'),
-                behavior: HitTestBehavior.opaque,
-                onTap: _handleClear,
-                child: Icon(
-                  CupertinoIcons.clear_circled_solid,
-                  color: iconColor,
-                  size: 18,
+                container: true,
+                button: true,
+                label: config.clearButtonSemanticLabel ??
+                    glassCupertinoLocalizationsOf(context).clearButtonLabel,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _handleClear,
+                  child: Icon(
+                    CupertinoIcons.clear_circled_solid,
+                    color: iconColor,
+                    size: 18,
+                  ),
                 ),
               )
-            : GestureDetector(
+            : Semantics(
                 key: const ValueKey('mic'),
-                behavior: HitTestBehavior.opaque,
-                onTap: config.onMicTap,
-                child: config.onMicTap != null
-                    ? Icon(
-                        CupertinoIcons.mic_fill,
-                        color: micColor,
-                        size: 18,
-                      )
-                    : const SizedBox.shrink(),
+                container: config.onMicTap != null,
+                button: config.onMicTap != null ? true : null,
+                label: config.onMicTap != null
+                    ? config.micButtonSemanticLabel
+                    : null,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: config.onMicTap,
+                  child: config.onMicTap != null
+                      ? Icon(
+                          CupertinoIcons.mic_fill,
+                          color: micColor,
+                          size: 18,
+                        )
+                      : const SizedBox.shrink(),
+                ),
               ),
       );
     }

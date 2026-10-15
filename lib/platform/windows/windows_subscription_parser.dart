@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import 'windows_server_record.dart';
+import 'windows_tls_certificate_policy.dart';
 
 final class WindowsSubscriptionParseResult {
   const WindowsSubscriptionParseResult({
@@ -87,6 +88,7 @@ final class WindowsSubscriptionParser {
     if (!const {'vless', 'trojan'}.contains(record.protocol.toLowerCase())) {
       throw const FormatException('Share export is supported for VLESS/Trojan');
     }
+    WindowsTlsCertificatePolicy.xrayFields(record);
     const supported = {
       'security',
       'type',
@@ -113,8 +115,10 @@ final class WindowsSubscriptionParser {
       'ed',
       'pqv',
       'ech',
+      'echConfigList',
       'vcn',
       'pcs',
+      'pinSHA256',
     };
     final emittedSupported = <String>{};
     final entries = <WindowsQueryParameter>[];
@@ -304,6 +308,8 @@ final class WindowsSubscriptionParser {
       'sni': 'sni',
       'alpn': 'alpn',
       'fp': 'fp',
+      'ech': 'ech',
+      'echConfigList': 'echConfigList',
       'flow': 'flow',
       'headerType': 'type',
     };
@@ -410,9 +416,13 @@ final class WindowsSubscriptionParser {
             .where((p) => p.isNotEmpty)
             .map((p) {
               final i = p.indexOf('=');
+              final key = _decodeQuery(i < 0 ? p : p.substring(0, i));
+              final value = i < 0 ? '' : p.substring(i + 1);
               return WindowsQueryParameter(
-                _decodeQuery(i < 0 ? p : p.substring(0, i)),
-                _decodeQuery(i < 0 ? '' : p.substring(i + 1)),
+                key,
+                const {'ech', 'echConfigList'}.contains(key)
+                    ? _decodeComponent(value)
+                    : _decodeQuery(value),
               );
             })
             .where((e) => e.key.isNotEmpty)

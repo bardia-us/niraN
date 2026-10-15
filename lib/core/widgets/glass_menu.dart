@@ -79,6 +79,7 @@ class _GlassActionMenuState<T> extends ConsumerState<GlassActionMenu<T>> {
               context: context,
               position: box.localToGlobal(Offset(0, box.size.height)),
               items: widget.items,
+              captureBackdrop: false,
             );
             if (mounted && value != null) widget.onSelected(value);
           },
@@ -101,11 +102,14 @@ class _GlassActionMenuState<T> extends ConsumerState<GlassActionMenu<T>> {
         // Null lets upstream include its real padding, gaps and text scale.
         // A fixed height opts into scrolling even for a two-item menu.
         menuBorderRadius: 22,
+        selectionColor: theme.brightness == Brightness.dark
+            ? const Color(0x3DFFFFFF)
+            : const Color(0x16000000),
         menuPadding: const EdgeInsets.symmetric(vertical: 8),
         settings: niranLiquidSettings(theme.brightness),
         quality: liveGlassReady
             ? glass.GlassQuality.premium
-            : glass.GlassQuality.minimal,
+            : glass.GlassQuality.standard,
         triggerBuilder: (context, toggle) => GlassMenuButton(
           tooltip: widget.tooltip,
           icon: widget.icon,
@@ -144,6 +148,7 @@ Future<T?> showGlassMenu<T>({
   required Offset position,
   required List<GlassMenuItem<T>> items,
   bool liveLiquid = true,
+  bool captureBackdrop = true,
 }) async {
   final useLiveBackdrop = liveLiquid && liveGlassReady;
   if (!context.mounted) return null;
@@ -158,6 +163,7 @@ Future<T?> showGlassMenu<T>({
   return showSnapshotGlassRoute<T>(
     context: context,
     useLiveBackdrop: useLiveBackdrop,
+    captureBackdrop: captureBackdrop,
     barrierDismissible: true,
     captureRegion: Rect.fromLTWH(left, top, width, estimatedHeight).inflate(48),
     transitionDuration: MediaQuery.disableAnimationsOf(context)
@@ -173,7 +179,7 @@ Future<T?> showGlassMenu<T>({
             color: Colors.transparent,
             child: GlassSurface(
               radius: 18,
-              blur: useLiveBackdrop ? messagesLiquidBlur : 16,
+              blur: useLiveBackdrop ? messagesLiquidBlur : 18,
               saturation: useLiveBackdrop ? messagesLiquidSaturation : 1.20,
               liveLiquid: liveLiquid,
               padding: const EdgeInsets.symmetric(vertical: 7),
@@ -204,9 +210,9 @@ Future<T?> showGlassMenu<T>({
                                 items[index].label,
                                 style: items[index].destructive
                                     ? TextStyle(
-                                        color: Theme.of(routeContext)
-                                            .colorScheme
-                                            .error,
+                                        color: Theme.of(
+                                          routeContext,
+                                        ).colorScheme.error,
                                       )
                                     : null,
                               ),

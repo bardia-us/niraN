@@ -6,6 +6,7 @@ import '../../theme/glass_theme_data.dart';
 import '../../theme/glass_theme.dart';
 import '../../types/glass_quality.dart';
 import '../shared/adaptive_liquid_glass_layer.dart';
+import '../shared/glass_accessibility_scope.dart';
 
 /// Position where the toast should appear on screen.
 enum GlassToastPosition {
@@ -318,18 +319,21 @@ class _GlassToastState extends State<GlassToast> {
             ),
             const SizedBox(width: 12),
 
-            // Message
+            // Message. Already the label of the live region above, so the
+            // text is kept out of semantics to be read once, not twice.
             Flexible(
-              child: Text(
-                widget.message,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.2,
+              child: ExcludeSemantics(
+                child: Text(
+                  widget.message,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -0.2,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
 
@@ -413,6 +417,9 @@ class _GlassToastOverlayState extends State<_GlassToastOverlay>
   late CurvedAnimation _fadeCurve;
   late Animation<double> _fadeAnimation;
   Timer? _dismissTimer;
+
+  static const Animation<Offset> _noSlide =
+      AlwaysStoppedAnimation<Offset>(Offset.zero);
 
   @override
   void initState() {
@@ -508,9 +515,14 @@ class _GlassToastOverlayState extends State<_GlassToastOverlay>
         key: const Key('glass_toast_dismissible'),
         direction: _getDismissDirection(),
         onDismissed: (_) => _dismiss(),
-        child: toast,
+        // The swipe has no meaning to a screen reader; the same dismissal is
+        // offered to it as a semantic action. Pointer users get the timer.
+        child: Semantics(container: true, onDismiss: _dismiss, child: toast),
       );
     }
+
+    // Reduce Motion: the toast fades in and out in place, without the slide.
+    final reduceMotion = GlassAccessibilityData.of(context).reduceMotion;
 
     return Positioned(
       top: widget.position == GlassToastPosition.top ? verticalPosition : null,
@@ -520,7 +532,7 @@ class _GlassToastOverlayState extends State<_GlassToastOverlay>
       left: 16,
       right: 16,
       child: SlideTransition(
-        position: _slideAnimation,
+        position: reduceMotion ? _noSlide : _slideAnimation,
         child: FadeTransition(
           opacity: _fadeAnimation,
           child: widget.position == GlassToastPosition.center

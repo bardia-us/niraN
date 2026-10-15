@@ -117,7 +117,8 @@ class ReleaseAsset {
 }
 
 class GitHubUpdateChecker {
-  const GitHubUpdateChecker();
+  const GitHubUpdateChecker({this.timeout = const Duration(seconds: 10)});
+  final Duration timeout;
 
   Future<ReleaseCheckResult> check(String currentVersion) async {
     final payload = await _fetch(
@@ -140,29 +141,24 @@ class GitHubUpdateChecker {
   Future<Map<String, dynamic>> _fetch(Uri uri, String currentVersion) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
-      final request = await client.getUrl(uri);
-      request.headers
-        ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
-        ..set(
-          HttpHeaders.userAgentHeader,
-          'niraN-update-checker/$currentVersion',
-        );
-      final response = await request.close().timeout(
-        const Duration(seconds: 10),
-      );
-      if (response.statusCode != HttpStatus.ok) {
-        throw const HttpException('GitHub release check failed');
-      }
-      final payload = jsonDecode(
-        await utf8.decoder
-            .bind(response)
-            .join()
-            .timeout(const Duration(seconds: 10)),
-      );
-      if (payload is! Map<String, dynamic>) {
-        throw const FormatException('Invalid GitHub response');
-      }
-      return payload;
+      return await (() async {
+        final request = await client.getUrl(uri);
+        request.headers
+          ..set(HttpHeaders.acceptHeader, 'application/vnd.github+json')
+          ..set(
+            HttpHeaders.userAgentHeader,
+            'niraN-update-checker/$currentVersion',
+          );
+        final response = await request.close();
+        if (response.statusCode != HttpStatus.ok) {
+          throw const HttpException('GitHub release check failed');
+        }
+        final payload = jsonDecode(await utf8.decoder.bind(response).join());
+        if (payload is! Map<String, dynamic>) {
+          throw const FormatException('Invalid GitHub response');
+        }
+        return payload;
+      })().timeout(timeout);
     } finally {
       client.close(force: true);
     }

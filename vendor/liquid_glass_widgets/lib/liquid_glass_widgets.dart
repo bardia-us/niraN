@@ -16,6 +16,7 @@ export 'src/renderer/liquid_glass_renderer.dart'
         LiquidGlassBlendGroup,
         GlassGlow,
         debugPaintLiquidGlassGeometry;
+export 'src/renderer/glass_backdrop_group.dart'; // GlassBackdropGroup
 export 'src/engine/liquid_shape.dart'; // all shapes are public
 export 'types/interaction_notification.dart'; // public for Smart Silence support
 export 'types/glass_specular_sharpness.dart'; // GlassSpecularSharpness enum
@@ -106,6 +107,7 @@ export 'widgets/overlays/glass_modal_sheet.dart'
         GlassSheetState,
         GlassSheetMode,
         GlassSheetDetent, // the `detents` set on GlassModalSheet / .show()
+        GlassSheetPlacement, // the `placement` on GlassModalSheet / .show()
         GlassFillTransition,
         GlassModalSheetController,
         GlassMorphTrigger, // wraps a trigger a sheet morphs out of
@@ -138,3 +140,4 @@ export 'widgets/surfaces/shared/glass_search_bar_config.dart';
 export 'widgets/surfaces/shared/tab_bar_searchable_controller.dart';
 export 'widgets/surfaces/glass_tab_bar.dart';
 export 'widgets/surfaces/glass_toolbar.dart';
+export 'widgets/surfaces/glass_vertical_bar.dart';

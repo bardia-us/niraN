@@ -158,16 +158,16 @@ final class WindowsSingBoxTunConfigBuilder {
             'action': 'route',
             'server': 'bootstrap-dns',
           },
-        {
-          'domain': ['localhost'],
-          'domain_suffix': ['.localhost', '.local'],
-          'action': 'route',
-          'server': 'local-dns',
-        },
-        if (WindowsRoutingPolicy.bypassIran(settings))
+        if (WindowsRoutingPolicy.bypassLocal(settings))
           {
             'domain': ['localhost'],
-            'domain_suffix': ['.ir', '.local'],
+            'domain_suffix': ['.localhost', '.local'],
+            'action': 'route',
+            'server': 'local-dns',
+          },
+        if (WindowsRoutingPolicy.bypassIran(settings))
+          {
+            'domain_suffix': ['.ir'],
             'action': 'route',
             'server': 'direct-dns',
           },
@@ -247,17 +247,6 @@ final class WindowsSingBoxTunConfigBuilder {
     ];
     rules.addAll([
       {
-        'domain': ['localhost'],
-        'domain_suffix': ['.localhost', '.local'],
-        'action': 'route',
-        'outbound': 'direct',
-      },
-      {
-        'ip_cidr': WindowsRoutingPolicy.localCidrs,
-        'action': 'route',
-        'outbound': 'direct',
-      },
-      {
         'inbound': [
           if (tun) 'tun-in' else ...['socks-in', 'http-in'],
         ],
@@ -272,6 +261,21 @@ final class WindowsSingBoxTunConfigBuilder {
           'port': [53],
           'action': 'hijack-dns',
         },
+      {
+        'domain': ['localhost'],
+        'domain_suffix': ['.localhost', '.local'],
+        'action': 'route',
+        'outbound': WindowsRoutingPolicy.bypassLocal(settings)
+            ? 'direct'
+            : 'proxy',
+      },
+      {
+        'ip_cidr': WindowsRoutingPolicy.localCidrs,
+        'action': 'route',
+        'outbound': WindowsRoutingPolicy.bypassLocal(settings)
+            ? 'direct'
+            : 'proxy',
+      },
     ]);
     if (WindowsRoutingPolicy.bypassIran(settings)) {
       rules.addAll([

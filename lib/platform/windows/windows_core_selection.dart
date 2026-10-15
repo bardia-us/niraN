@@ -1,4 +1,5 @@
 import 'windows_server_record.dart';
+import 'windows_tls_certificate_policy.dart';
 
 enum WindowsProxyCore { xray, singBox }
 
@@ -41,6 +42,14 @@ abstract final class WindowsCoreSelection {
     Map<String, Object?> settings,
   ) {
     final p = server.parameters;
+    // Bundled sing-box 1.14 supports SPKI pins, not Xray's whole-certificate
+    // pins or a verification name independent of the ClientHello SNI.
+    for (final key in WindowsTlsCertificatePolicy.pinKeys) {
+      if (p.containsKey(key)) return 'TLS certificate pin ($key)';
+    }
+    if (p.containsKey('vcn')) {
+      return 'TLS certificate verification name (vcn)';
+    }
     if (!protocols.contains(server.protocol.toLowerCase())) return 'protocol';
     final protocol = server.protocol.toLowerCase();
     final transport = server.transport.toLowerCase();
@@ -77,7 +86,15 @@ abstract final class WindowsCoreSelection {
     ].contains(server.security.toLowerCase())) {
       return 'security';
     }
-    for (final key in ['fm', 'extra', 'pqv', 'mldsa65Verify', 'plugin']) {
+    for (final key in [
+      'fm',
+      'extra',
+      'pqv',
+      'mldsa65Verify',
+      'plugin',
+      'ech',
+      'echConfigList',
+    ]) {
       if ((p[key] ?? '').trim().isNotEmpty) return key;
     }
     if (settings['fragmentEnabled'] == true) return 'fragmentation';

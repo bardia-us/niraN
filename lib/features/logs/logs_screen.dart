@@ -177,6 +177,9 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                             buttonItems: region.contextMenuButtonItems,
                           ),
                       child: ListView.separated(
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.paddingOf(context).bottom,
+                        ),
                         controller: _scrollController,
                         scrollCacheExtent: const ScrollCacheExtent.pixels(420),
                         itemCount: logs.length,
@@ -212,8 +215,9 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                                 ),
                                 title: Text(
                                   log.message,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(height: 1.45),
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.bodySmall?.copyWith(height: 1.45),
                                 ),
                                 subtitle: Text(
                                   formatDateTime(

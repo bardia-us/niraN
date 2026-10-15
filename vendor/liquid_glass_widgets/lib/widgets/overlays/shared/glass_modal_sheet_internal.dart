@@ -8,7 +8,8 @@ class _SheetLayout extends StatelessWidget {
   final double stretch;
   final double interactionStretch;
   final double resistance;
-  final double hPad;
+  final double left;
+  final double right;
   final double effectiveBottom;
   final double effectiveHeight;
   final double topRadius;
@@ -57,7 +58,8 @@ class _SheetLayout extends StatelessWidget {
     required this.stretch,
     required this.interactionStretch,
     required this.resistance,
-    required this.hPad,
+    required this.left,
+    required this.right,
     required this.effectiveBottom,
     required this.effectiveHeight,
     required this.topRadius,
@@ -112,8 +114,8 @@ class _SheetLayout extends StatelessWidget {
     );
 
     return Positioned(
-      left: hPad,
-      right: hPad,
+      left: left,
+      right: right,
       bottom: effectiveBottom,
       height: effectiveHeight,
       child: Listener(
@@ -753,6 +755,9 @@ class GlassModalSheetScaffold extends StatelessWidget {
   /// Background color used when the sheet is fully expanded and opaque.
   final Color? expandedColor;
 
+  /// [expandedColor] while the glass brightness is dark.
+  final Color? expandedDarkColor;
+
   /// Rendering quality (BackdropFilter vs Shader). Defaults to standard.
   final GlassQuality? quality;
 
@@ -869,6 +874,11 @@ class GlassModalSheetScaffold extends StatelessWidget {
   /// Corner radius for 'peek' state.
   final double? peekBottomRadius;
 
+  /// Where the sheet sits across a screen with room beside it.
+  ///
+  /// See [GlassModalSheet.placement].
+  final GlassSheetPlacement placement;
+
   /// Creates a [GlassModalSheetScaffold].
   const GlassModalSheetScaffold({
     super.key,
@@ -886,6 +896,7 @@ class GlassModalSheetScaffold extends StatelessWidget {
     this.fillThreshold = 0.85,
     this.settings,
     this.expandedColor,
+    this.expandedDarkColor,
     this.controller,
     this.onStateChanged,
     this.mode = GlassSheetMode.dismissible,
@@ -923,6 +934,7 @@ class GlassModalSheetScaffold extends StatelessWidget {
     this.peekWidth,
     this.peekTopBorderRadius,
     this.peekBottomRadius,
+    this.placement = GlassSheetPlacement.automatic,
   }) : assert(
             detents.length > 0,
             'GlassModalSheetScaffold needs at least one detent — add medium '
@@ -937,6 +949,13 @@ class GlassModalSheetScaffold extends StatelessWidget {
           child: mode == GlassSheetMode.dismissible
               ? GestureDetector(
                   behavior: HitTestBehavior.opaque,
+                  // A pointer convenience over the whole page: as a semantic
+                  // tap it would merge into whatever node encloses the body.
+                  // Screen readers dismiss through the sheet's drag handle,
+                  // which carries its own tap action while it is shown
+                  // (showDragIndicator); without it the app's own close
+                  // control is the way out.
+                  excludeFromSemantics: true,
                   onTap: () {
                     controller?.snapToState(GlassSheetState.hidden);
                   },
@@ -957,6 +976,7 @@ class GlassModalSheetScaffold extends StatelessWidget {
           fillThreshold: fillThreshold,
           settings: settings,
           expandedColor: expandedColor,
+          expandedDarkColor: expandedDarkColor,
           controller: controller,
           onStateChanged: onStateChanged,
           mode: mode,
@@ -994,6 +1014,7 @@ class GlassModalSheetScaffold extends StatelessWidget {
           peekWidth: peekWidth,
           peekTopBorderRadius: peekTopBorderRadius,
           peekBottomRadius: peekBottomRadius,
+          placement: placement,
           child: sheet,
         ),
       ],

@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 
+import '../../src/renderer/glass_backdrop_group.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/widgets/surfaces/vertical_bar_title_row.dart';
 import '../../types/glass_quality.dart';
 import '../interactive/glass_button.dart';
 import '../shared/glass_isolation_scope.dart';
@@ -10,6 +12,7 @@ import 'glass_bar_item.dart';
 import 'glass_large_title.dart' show GlassLargeTitleController;
 import 'glass_navigation_shell.dart';
 import 'glass_pinned_bar_chrome.dart';
+import 'glass_vertical_bar.dart';
 
 /// A navigation bar layout widget following Apple's iOS 26 design patterns.
 ///
@@ -108,6 +111,7 @@ class GlassAppBar extends StatelessWidget
     this.buttonSettings,
     this.largeTitleController,
     this.bottom,
+    this.groupBackdrop = true,
   })  : pinnedActions = null,
         pinnedLeading = const <GlassBarItem>[],
         pinnedBackButton = true,
@@ -153,6 +157,7 @@ class GlassAppBar extends StatelessWidget
     this.buttonSettings,
     this.largeTitleController,
     this.bottom,
+    this.groupBackdrop = true,
   })  : pinnedActions = actions,
         pinnedLeading = leading,
         pinnedBackButton = backButton,
@@ -256,6 +261,10 @@ class GlassAppBar extends StatelessWidget
   bool shouldFullyObstruct(BuildContext context) => backgroundColor.a >= 1.0;
 
   /// Padding around the app bar content.
+  ///
+  /// A [GlassAppBar.pinned] bar in iPhone Duo's vertical bar strip lays its
+  /// title row out to [GlassVerticalBarMetrics] instead, so it lines up with
+  /// the chrome the shell draws there.
   final EdgeInsetsGeometry padding;
 
   /// Default glass settings for buttons inside this app bar.
@@ -283,6 +292,15 @@ class GlassAppBar extends StatelessWidget
   /// ```
   final LiquidGlassSettings? buttonSettings;
 
+  /// Whether the bar's glass, its leading and action buttons and the glass
+  /// in [bottom], reads the backdrop together in one [GlassBackdropGroup].
+  /// On Impeller with premium glass that saves a full-screen backdrop copy
+  /// per button. Inside a [GlassBackdropGroup] of your own the bar joins
+  /// that group instead of starting one. Defaults to true; set false to keep
+  /// the bar out of any group, e.g. when glass in the bar lies over other
+  /// glass of the bar.
+  final bool groupBackdrop;
+
   /// Optional controller that drives the inline title opacity.
   ///
   /// When provided, the [title] widget is automatically wrapped in a
@@ -308,6 +326,7 @@ class GlassAppBar extends StatelessWidget
             pinnedLeadingItemsSupplementBackButton,
         onBack: onBack,
         buttonSettings: buttonSettings,
+        largeTitleController: largeTitleController,
         builder: (context, chrome) => _buildBar(context, chrome: chrome),
       );
     }
@@ -326,15 +345,36 @@ class GlassAppBar extends StatelessWidget
         ? actions
         : (chrome.actions.isEmpty ? null : chrome.actions);
 
-    final Widget toolbarRow = SafeArea(
+    // In iPhone Duo's vertical bar strip only the title stays behind, leading
+    // in a row at the top of the content, beside whatever items stay
+    // horizontal. Only a pinned bar moves: UIKit moves the bars a container
+    // owns, and the shell is this bar's container.
+    final verticalBar =
+        chrome == null ? null : GlassVerticalBar.maybeOf(context);
+
+    Widget toolbarRow = SafeArea(
       bottom: false,
       child: Padding(
-        padding: padding,
+        padding: verticalBar == null
+            ? padding
+            : verticalBar.edge == GlassVerticalBarEdge.trailing
+                ? EdgeInsetsDirectional.only(
+                    start: verticalBar.titleInset,
+                    end: GlassVerticalBarMetrics.rowInset,
+                    top: verticalBar.rowTop,
+                  )
+                : EdgeInsetsDirectional.only(
+                    start: GlassVerticalBarMetrics.rowInset,
+                    end: verticalBar.titleInset,
+                    top: verticalBar.rowTop,
+                  ),
         child: SizedBox(
-          height: toolbarHeight,
+          height: verticalBar == null
+              ? toolbarHeight
+              : GlassVerticalBarMetrics.rowHeight,
           child: CustomMultiChildLayout(
             delegate: _ToolbarLayout(
-              centerTitle: centerTitle,
+              centerTitle: centerTitle && verticalBar == null,
               textDirection: Directionality.of(context),
             ),
             children: [
@@ -345,7 +385,7 @@ class GlassAppBar extends StatelessWidget
                 ),
               LayoutId(
                 id: _ToolbarSlot.title,
-                child: _buildTitle(context),
+                child: _buildTitle(context, inStrip: verticalBar != null),
               ),
               if (effectiveActions != null)
                 LayoutId(
@@ -361,6 +401,15 @@ class GlassAppBar extends StatelessWidget
         ),
       ),
     );
+
+    // A large title in the strip's row takes the row with it as the content
+    // scrolls, and hides it while its search is open.
+    if (verticalBar != null) {
+      toolbarRow = VerticalBarTitleRow(
+        controller: largeTitleController,
+        child: toolbarRow,
+      );
+    }
 
     Widget content = ColoredBox(
       color: backgroundColor,
@@ -389,7 +438,11 @@ class GlassAppBar extends StatelessWidget
     return GlassIsolationScope(
       isolated: true,
       defaultQuality: GlassQuality.premium,
-      child: content,
+      child: GlassBackdropGroup(
+        enabled: groupBackdrop,
+        joinEnclosing: true,
+        child: content,
+      ),
     );
   }
 
@@ -405,11 +458,23 @@ class GlassAppBar extends StatelessWidget
   ///
   /// With a controller the result is wrapped in a [ListenableBuilder] so only
   /// the title opacity rebuilds on scroll, not the entire bar.
-  Widget _buildTitle(BuildContext context) {
+  ///
+  /// In iPhone Duo's vertical bar strip ([inStrip]) a large title is drawn
+  /// here rather than in the scroll view, in the large title's weight at
+  /// [VerticalBarTitleRow.largeTitleFontSize], and there is no inline title to
+  /// fade in: natively the row scrolls away with the content and nothing
+  /// replaces it.
+  Widget _buildTitle(BuildContext context, {bool inStrip = false}) {
+    final largeInStrip = inStrip && largeTitleController != null;
+    final textTheme = CupertinoTheme.of(context).textTheme;
     final Widget styledTitle = title == null
         ? const SizedBox.shrink()
         : DefaultTextStyle(
-            style: CupertinoTheme.of(context).textTheme.navTitleTextStyle,
+            style: largeInStrip
+                ? textTheme.navLargeTitleTextStyle.copyWith(
+                    fontSize: VerticalBarTitleRow.largeTitleFontSize,
+                  )
+                : textTheme.navTitleTextStyle,
             // iOS navigation titles are a single truncated line — they never
             // wrap, however little room the bar items leave them.
             maxLines: 1,
@@ -418,7 +483,7 @@ class GlassAppBar extends StatelessWidget
             child: Semantics(header: true, child: title),
           );
 
-    if (largeTitleController == null) return styledTitle;
+    if (largeTitleController == null || largeInStrip) return styledTitle;
 
     return ListenableBuilder(
       listenable: largeTitleController!,

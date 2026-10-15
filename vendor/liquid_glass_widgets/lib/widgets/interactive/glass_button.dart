@@ -143,6 +143,7 @@ class GlassButton extends StatefulWidget {
     this.quality,
     this.focusNode,
     this.autofocus = false,
+    this.showFocusRing = true,
     // LiquidStretch properties
     this.interactionScale,
     this.stretch = 0.5,
@@ -205,6 +206,7 @@ class GlassButton extends StatefulWidget {
     this.quality,
     this.focusNode,
     this.autofocus = false,
+    this.showFocusRing = true,
     // LiquidStretch properties
     this.interactionScale,
     this.stretch = 0.5,
@@ -596,6 +598,8 @@ class GlassButton extends StatefulWidget {
   /// Defaults to false. Set to true for the primary action button in a dialog
   /// or confirmation sheet so keyboard users can confirm immediately.
   final bool autofocus;
+  /// Hide the decorative ring without disabling keyboard focus/activation.
+  final bool showFocusRing;
 
   /// Whether the button can request focus.
   ///
@@ -803,9 +807,9 @@ class _GlassButtonState extends State<GlassButton>
           Listenable.merge([_saturationAnimation, _isHovered, _isFocused]),
       builder: (context, _) {
         double opacity = _saturationAnimation.value * effectiveAmbientBaseLight;
-        if (_isFocused.value) {
+        if (effectiveAmbientBaseLight > 0 && _isFocused.value) {
           opacity += 0.15;
-        } else if (_isHovered.value) {
+        } else if (effectiveAmbientBaseLight > 0 && _isHovered.value) {
           opacity += 0.08;
         }
         if (opacity <= 0) return const SizedBox.shrink();
@@ -906,7 +910,11 @@ class _GlassButtonState extends State<GlassButton>
           settings: baseSettings, // Preserve user's saturation setting!
           quality: effectiveQuality,
           useOwnLayer: widget.useOwnLayer,
-          glowIntensity: _saturationAnimation.value, // 0.0-1.0 animation
+          // An explicitly disabled glow must also be disabled in the Skia
+          // shader, not just the Impeller overlay. Preserve default feedback.
+          glowIntensity: effectiveGlowColor.a == 0 || effectiveGlowOpacity <= 0
+              ? 0
+              : _saturationAnimation.value,
           // isStationary: true → pass isInteractive:false so _FrostedFallback
           // keeps its BackdropFilter blur in GlassQuality.minimal (the guard
           // only bites on the minimal path; standard/premium are unaffected).
@@ -1006,7 +1014,7 @@ class _GlassButtonState extends State<GlassButton>
       semanticOnTap: (!widget.excludeFromSemantics && widget.enabled)
           ? widget.onTap
           : null,
-      shape: widget.shape,
+      shape: widget.showFocusRing ? widget.shape : null,
       isFocusedNotifier: _isFocused,
       isHoveredNotifier: _isHovered,
       onKeyboardActivate: _activateFromKeyboard,

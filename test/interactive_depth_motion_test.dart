@@ -30,6 +30,16 @@ Future<void> _mount(
 );
 
 void main() {
+  testWidgets('stationary hover keeps text geometry pixel-aligned', (tester) async {
+    await _mount(tester, onPressed: () {});
+    final resting = tester.getRect(find.text('Run'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: const Offset(1, 1));
+    await mouse.moveTo(tester.getCenter(find.byType(TextButton)));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(find.text('Run')), resting);
+    await mouse.removePointer();
+  });
   testWidgets('held control follows small pointer movement before pan slop', (
     tester,
   ) async {

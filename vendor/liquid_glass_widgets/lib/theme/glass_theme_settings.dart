@@ -66,6 +66,7 @@ class GlassThemeSettings {
     this.rimShade,
     this.rimShadeEnds,
     this.rimLight,
+    this.bodyShade,
     this.lensModel,
   });
 
@@ -132,6 +133,9 @@ class GlassThemeSettings {
   /// See [LiquidGlassSettings.rimLight].
   final double? rimLight;
 
+  /// See [LiquidGlassSettings.bodyShade].
+  final double? bodyShade;
+
   /// See [LiquidGlassSettings.lensModel].
   final GlassLensModel? lensModel;
 
@@ -167,6 +171,7 @@ class GlassThemeSettings {
       rimShade: rimShade ?? base.rimShade,
       rimShadeEnds: rimShadeEnds ?? base.rimShadeEnds,
       rimLight: rimLight ?? base.rimLight,
+      bodyShade: bodyShade ?? base.bodyShade,
       lensModel: lensModel ?? base.lensModel,
       frostWeight: frostWeight ?? base.frostWeight,
       blurWeight: blurWeight ?? base.blurWeight,
@@ -226,6 +231,7 @@ class GlassThemeSettings {
       rimShade: _lerpDoubleField(a.rimShade, b.rimShade, t),
       rimShadeEnds: _lerpDoubleField(a.rimShadeEnds, b.rimShadeEnds, t),
       rimLight: _lerpDoubleField(a.rimLight, b.rimLight, t),
+      bodyShade: _lerpDoubleField(a.bodyShade, b.bodyShade, t),
       lensModel: t < 0.5 ? a.lensModel : b.lensModel,
     );
   }
@@ -263,6 +269,7 @@ class GlassThemeSettings {
     double? rimShade,
     double? rimShadeEnds,
     double? rimLight,
+    double? bodyShade,
     GlassLensModel? lensModel,
   }) {
     return GlassThemeSettings(
@@ -287,6 +294,7 @@ class GlassThemeSettings {
       rimShade: rimShade ?? this.rimShade,
       rimShadeEnds: rimShadeEnds ?? this.rimShadeEnds,
       rimLight: rimLight ?? this.rimLight,
+      bodyShade: bodyShade ?? this.bodyShade,
       lensModel: lensModel ?? this.lensModel,
     );
   }
@@ -317,6 +325,7 @@ class GlassThemeSettings {
           rimShade == other.rimShade &&
           rimShadeEnds == other.rimShadeEnds &&
           rimLight == other.rimLight &&
+          bodyShade == other.bodyShade &&
           lensModel == other.lensModel;
 
   @override
@@ -342,6 +351,7 @@ class GlassThemeSettings {
         rimShade,
         rimShadeEnds,
         rimLight,
+        bodyShade,
         lensModel,
       ]);
 

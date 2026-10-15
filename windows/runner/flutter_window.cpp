@@ -7,6 +7,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "resource.h"
+#include "startup_trace.h"
+#include "startup_window.h"
 #include "windows/native/windows_backend_bridge.h"
 
 namespace {
@@ -60,26 +62,31 @@ bool FlutterWindow::OnCreate() {
   // creation / destruction in the startup path.
   flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
       frame.right - frame.left, frame.bottom - frame.top, project_);
+  niran::TraceNativeStartup("engine_created");
   // Ensure that basic setup of the controller was successful.
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  niran::TraceNativeStartup("plugins_registered");
   windows_backend_ = std::make_unique<niran::WindowsBackendBridge>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  niran::TraceNativeStartup("native_bridge_ready");
   AddTrayIcon();
+  niran::TraceNativeStartup("tray_ready");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
-  });
-
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
-  flutter_controller_->ForceRedraw();
-
   return true;
+}
+
+void FlutterWindow::PresentStartup() {
+  niran::PresentStartupWindow(GetHandle(), [this]() {
+    niran::TraceNativeStartup("window_presented");
+    flutter_controller_->engine()->SetNextFrameCallback([]() {
+      niran::TraceNativeStartup("window_first_frame_shown");
+    });
+    flutter_controller_->ForceRedraw();
+  });
 }
 
 void FlutterWindow::OnDestroy() {
@@ -112,6 +119,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return windows_backend_->HandleAsyncCompletion(lparam) ? 0 : 1;
   }
   if (message == niran::WindowsBackendBridge::kExitApplicationMessage) {
+    restart_requested_ = wparam != 0;
     SaveWindowBounds(hwnd);
     exit_requested_ = true;
     if (windows_backend_) windows_backend_->Shutdown();

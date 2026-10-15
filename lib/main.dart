@@ -9,6 +9,9 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'core/localization/app_strings.dart';
 import 'core/diagnostics.dart';
+import 'core/startup_trace.dart';
+import 'core/render_mode.dart';
+import 'dart:io';
 import 'core/platform/native_models.dart';
 import 'core/platform/nirang_native.dart';
 import 'core/theme/app_theme.dart';
@@ -16,12 +19,23 @@ import 'core/theme/app_scroll_behavior.dart';
 import 'features/vpn/app_controller.dart';
 import 'features/vpn/app_shell.dart';
 import 'features/registration/registration_bootstrap.dart';
-import 'core/widgets/windows_glass_shader_warmup.dart';
 import 'core/widgets/live_liquid_glass.dart';
+import 'core/widgets/snapshot_glass.dart';
 
 Future<void> main() async {
-  PaintingBinding.shaderWarmUp = const WindowsGlassShaderWarmUp();
+  StartupTrace.start();
+  // The legacy full-viewport Skia warm-up defers the first Flutter frame.
+  // The loading screen paints plainly; optional programs start after it.
+  PaintingBinding.shaderWarmUp = null;
   WidgetsFlutterBinding.ensureInitialized();
+  WidgetsBinding.instance.addTimingsCallback(StartupTrace.frames);
+  StartupTrace.mark(StartupPhase.bindingReady);
+  final lightweight = await readStartupPerformanceMode(
+    Directory(
+      '${Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path}${Platform.pathSeparator}niraN',
+    ),
+  );
+  StartupTrace.mark(StartupPhase.renderModeLoaded);
   FlutterError.onError = (details) {
     FlutterError.dumpErrorToConsole(details);
     unawaited(
@@ -48,25 +62,38 @@ Future<void> main() async {
     ),
   );
   final startupClock = Stopwatch()..start();
-  // Start asynchronous preparation without holding the first Flutter frame.
-  // Registration runs concurrently; the product child still waits for both.
-  final graphicsReady = prepareLiveGlass().then((prepared) {
-    debugPrint(
-      'niraN graphics ready at ${startupClock.elapsedMilliseconds}ms: '
-      'shaderFilter=${ImageFilter.isShaderFilterSupported}, programsReady=$prepared',
-    );
-  });
+  final app = NiranRegistrationBootstrap(
+    firstFrameRasterized: WidgetsBinding.instance.waitUntilFirstFrameRasterized,
+    prepareGraphics: lightweight
+        ? null
+        : () async {
+            // Load the supported live and snapshot programs concurrently, without
+            // synthetic full-window captures. Access verification overlaps this.
+            final livePreparation = prepareLiveGlass();
+            await warmSnapshotGlass();
+            final prepared = await livePreparation;
+            debugPrint(
+              'niraN graphics ready at ${startupClock.elapsedMilliseconds}ms: '
+              'shaderFilter=${ImageFilter.isShaderFilterSupported}, '
+              'programsReady=$prepared',
+            );
+          },
+    child: const NirangApp(),
+  );
   runApp(
-    LiquidGlassWidgets.wrap(
-      brightnessResolver: Theme.maybeBrightnessOf,
-      adaptiveQuality: false,
-      child: NiranRegistrationBootstrap(
-        graphicsReady: graphicsReady,
-        child: const ProviderScope(child: NirangApp()),
-      ),
+    ProviderScope(
+      overrides: [performanceModeProvider.overrideWithValue(lightweight)],
+      child: lightweight
+          ? app
+          : LiquidGlassWidgets.wrap(
+              brightnessResolver: Theme.maybeBrightnessOf,
+              adaptiveQuality: false,
+              child: app,
+            ),
     ),
   );
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    StartupTrace.mark(StartupPhase.loadingFrameBuilt);
     debugPrint('niraN first frame at ${startupClock.elapsedMilliseconds}ms');
   });
 }
@@ -90,6 +117,7 @@ class NirangApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final reducedEffects = ref.watch(performanceModeProvider);
     final appearance = ref.watch(
       appControllerProvider.select((value) {
         final settings = value.asData?.value.settings ?? const NativeSettings();
@@ -108,13 +136,13 @@ class NirangApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.personalized(
         Brightness.light,
-        reducedEffects: false,
+        reducedEffects: reducedEffects,
         accent: appearance.accent,
         darkStyle: appearance.darkStyle,
       ),
       darkTheme: AppTheme.personalized(
         Brightness.dark,
-        reducedEffects: false,
+        reducedEffects: reducedEffects,
         accent: appearance.accent,
         darkStyle: appearance.darkStyle,
       ),

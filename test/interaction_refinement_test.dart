@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show AdaptiveGlass;
 import 'package:niran/core/desktop_feedback.dart';
 import 'package:niran/core/widgets/glass_menu.dart';
 import 'package:niran/core/widgets/glass_surface.dart';
@@ -261,14 +263,14 @@ void main() {
         await tester.pumpAndSettle();
         final glass = tester.widget<GlassSurface>(find.byType(GlassSurface));
         expect(glass.blur, inInclusiveRange(12, 18));
-        final tints = tester.widgetList<ColoredBox>(
-          find.descendant(
-            of: find.byType(GlassSurface),
-            matching: find.byType(ColoredBox),
-          ),
+        final material = tester.widget<AdaptiveGlass>(
+          find.byType(AdaptiveGlass),
         );
-        final tint = tints.where((box) => box.color.a > .1).single;
-        expect(tint.color.a, inInclusiveRange(.35, .52));
+        expect(
+          material.settings.glassColor.a,
+          0,
+          reason: 'Approved Clear Lens keeps diffusion without a tint layer',
+        );
         final filter = find.byType(BackdropFilter);
         expect(filter, findsOneWidget);
         expect(

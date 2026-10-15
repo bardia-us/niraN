@@ -127,6 +127,10 @@ final class WindowsServerRecord {
     'port': port,
     'sni': parameters['sni'] ?? '',
     'fingerprint': parameters['fp'] ?? '',
+    'alpn': parameters['alpn'] ?? '',
+    'echConfigList': (parameters['echConfigList'] ?? '').trim().isNotEmpty
+        ? parameters['echConfigList']
+        : parameters['ech'] ?? '',
     'cipherSuites': parameters['cs'] ?? '',
     'finalMask': parameters['fm'] ?? '',
     'allowInsecure':

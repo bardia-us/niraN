@@ -16,6 +16,8 @@ class ServerInfo {
     required this.status,
     this.sni = '',
     this.fingerprint = '',
+    this.alpn = '',
+    this.echConfigList = '',
     this.cipherSuites = '',
     this.finalMask = '',
     this.allowInsecure = false,
@@ -36,6 +38,8 @@ class ServerInfo {
     port: _int(map['port']) ?? 0,
     sni: '${map['sni'] ?? ''}',
     fingerprint: '${map['fingerprint'] ?? ''}',
+    alpn: '${map['alpn'] ?? ''}',
+    echConfigList: '${map['echConfigList'] ?? ''}',
     cipherSuites: '${map['cipherSuites'] ?? ''}',
     finalMask: '${map['finalMask'] ?? ''}',
     allowInsecure: map['allowInsecure'] == true,
@@ -57,6 +61,8 @@ class ServerInfo {
   final int port;
   final String sni;
   final String fingerprint;
+  final String alpn;
+  final String echConfigList;
   final String cipherSuites;
   final String finalMask;
   final bool allowInsecure;
@@ -83,6 +89,8 @@ class ServerInfo {
     port: port,
     sni: sni,
     fingerprint: fingerprint,
+    alpn: alpn,
+    echConfigList: echConfigList,
     cipherSuites: cipherSuites,
     finalMask: finalMask,
     allowInsecure: allowInsecure,
@@ -190,6 +198,8 @@ class TrafficUsage {
     this.todayDownload,
     this.aggregateTodayUpload,
     this.aggregateTodayDownload,
+    this.aggregateMonthUpload,
+    this.aggregateMonthDownload,
     this.uploadBytesPerSecond,
     this.downloadBytesPerSecond,
     this.unavailableReason,
@@ -207,6 +217,8 @@ class TrafficUsage {
     todayDownload: _int(map['todayDownload']),
     aggregateTodayUpload: _int(map['aggregateTodayUpload']),
     aggregateTodayDownload: _int(map['aggregateTodayDownload']),
+    aggregateMonthUpload: _int(map['aggregateMonthUpload']),
+    aggregateMonthDownload: _int(map['aggregateMonthDownload']),
     uploadBytesPerSecond: (map['uploadBytesPerSecond'] as num?)?.toDouble(),
     downloadBytesPerSecond: (map['downloadBytesPerSecond'] as num?)?.toDouble(),
     unavailableReason: map['unavailableReason']?.toString(),
@@ -223,6 +235,8 @@ class TrafficUsage {
   final int? todayDownload;
   final int? aggregateTodayUpload;
   final int? aggregateTodayDownload;
+  final int? aggregateMonthUpload;
+  final int? aggregateMonthDownload;
   final double? uploadBytesPerSecond;
   final double? downloadBytesPerSecond;
   final String? unavailableReason;
@@ -239,6 +253,8 @@ class TrafficUsage {
     'todayDownload': todayDownload,
     'aggregateTodayUpload': aggregateTodayUpload,
     'aggregateTodayDownload': aggregateTodayDownload,
+    'aggregateMonthUpload': aggregateMonthUpload,
+    'aggregateMonthDownload': aggregateMonthDownload,
     'uploadBytesPerSecond': uploadBytesPerSecond,
     'downloadBytesPerSecond': downloadBytesPerSecond,
     'unavailableReason': unavailableReason,
@@ -253,6 +269,7 @@ class NativeSettings {
     this.tunEnabled = false,
     this.routingMode = 'bypassIran',
     this.bypassIran = true,
+    this.localBypassMode = 'auto',
     this.customRulesEnabled = false,
     this.coreByProtocol = const {},
     this.customDomains = '',
@@ -307,6 +324,7 @@ class NativeSettings {
     this.accentColor = 'purple',
     this.darkStyle = 'graphite',
     this.sidebarRight = false,
+    this.navigationPosition = '',
     this.soundEffects = true,
     this.soundStyle = 'notification',
     this.homeLayout = '',
@@ -394,6 +412,8 @@ class NativeSettings {
     accentColor: '${map['accentColor'] ?? 'purple'}',
     darkStyle: '${map['darkStyle'] ?? 'graphite'}',
     sidebarRight: map['sidebarRight'] == true,
+    localBypassMode: '${map['localBypassMode'] ?? 'auto'}',
+    navigationPosition: '${map['navigationPosition'] ?? ''}',
     soundEffects: map['soundEffects'] != false,
     soundStyle: map['soundStyle'] == 'classic' ? 'classic' : 'notification',
     homeLayout: map['homeLayout'] is String ? map['homeLayout'] as String : '',
@@ -470,6 +490,15 @@ class NativeSettings {
   final String accentColor;
   final String darkStyle;
   final bool sidebarRight;
+  final String localBypassMode;
+  final String navigationPosition;
+  String get resolvedNavigationPosition => navigationPosition == 'top'
+      ? 'bottom'
+      : const ['left', 'right', 'bottom'].contains(navigationPosition)
+      ? navigationPosition
+      : sidebarRight
+      ? 'right'
+      : 'left';
   final bool soundEffects;
   final String soundStyle;
   final String homeLayout;
@@ -594,6 +623,8 @@ class NativeSettings {
       accentColor: stringValue('accentColor', accentColor),
       darkStyle: stringValue('darkStyle', darkStyle),
       sidebarRight: boolValue('sidebarRight', sidebarRight),
+      localBypassMode: stringValue('localBypassMode', localBypassMode),
+      navigationPosition: stringValue('navigationPosition', navigationPosition),
       soundEffects: boolValue('soundEffects', soundEffects),
       soundStyle: stringValue('soundStyle', soundStyle),
       homeLayout: stringValue('homeLayout', homeLayout),

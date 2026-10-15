@@ -106,6 +106,7 @@ class GlassIconButton extends StatelessWidget {
     this.platformViewBackdrop = false,
     this.focusNode,
     this.autofocus = false,
+    this.showFocusRing = true,
     this.semanticLabel,
   });
 
@@ -228,6 +229,7 @@ class GlassIconButton extends StatelessWidget {
 
   /// Externally provided focus node.
   final FocusNode? focusNode;
+  final bool showFocusRing;
 
   /// Whether to request focus immediately.
   final bool autofocus;
@@ -275,6 +277,7 @@ class GlassIconButton extends StatelessWidget {
       platformViewBackdrop: platformViewBackdrop,
       focusNode: focusNode,
       autofocus: autofocus,
+      showFocusRing: showFocusRing,
       label: semanticLabel ?? '',
       child: iconWidget,
     );

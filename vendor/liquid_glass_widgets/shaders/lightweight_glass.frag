@@ -412,7 +412,7 @@ void main() {
       pmRgb2 = outRgb2 + vec3(0.05) * uIndicatorWeight + vec3(fresnel);
       // Meniscus rim darkening (PATH A fallback — no valid texture)
       pmRgb2 *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
-      fragColor = vec4(clamp(pmRgb2, 0.0, 1.0) * mask, outA2 * mask);
+      fragColor = vec4(min(clamp(pmRgb2, 0.0, 1.0), vec3(outA2)) * mask, outA2 * mask);
     } else {
       // Normal PATH A — background texture is valid.
       //
@@ -534,7 +534,9 @@ void main() {
     // [1] Hemisphere + [2] light-modulated absorption (PATH B — no background texture)
     pmRgb *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
 
-    fragColor = vec4(clamp(pmRgb, 0.0, 1.0) * mask, pmA * mask);
+    // Rim/Fresnel lighting may exceed opacity. Flutter's compositor requires
+    // premultiplied output, including partially covered anti-aliased pixels.
+    fragColor = vec4(min(clamp(pmRgb, 0.0, 1.0), vec3(pmA)) * mask, pmA * mask);
   }
 }
 

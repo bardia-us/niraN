@@ -5,6 +5,28 @@ import 'package:niran/core/platform/native_models.dart';
 import 'package:niran/features/vpn/home_layout.dart';
 
 void main() {
+  test('v2 factory migration is independent of new default geometry', () {
+    final old = {
+      for (final entry in HomeLayout.defaults().placements.entries)
+        entry.key: entry.value.toMap(),
+    };
+    old['status'] = {'x': 0, 'y': 0, 'width': 76, 'height': 84};
+    old['subscription'] = {'x': 78, 'y': 0, 'width': 42, 'height': 28};
+    old['traffic'] = {'x': 78, 'y': 32, 'width': 42, 'height': 44};
+    old['logs'] = {'x': 0, 'y': 88, 'width': 68, 'height': 32};
+    final migrated = HomeLayout.tryDecode(
+      jsonEncode({'version': 2, 'placements': old}),
+    )!;
+    expect(migrated['logs'].width, 76);
+    expect(migrated['status'].width, 76);
+    old['logs']!['height'] = 30;
+    expect(
+      HomeLayout.tryDecode(
+        jsonEncode({'version': 2, 'placements': old}),
+      )!['logs'].width,
+      68,
+    );
+  });
   test(
     'v1 detached controls migrate inside status without losing other preferences',
     () {
@@ -63,8 +85,8 @@ void main() {
     () {
       final layout = HomeLayout.defaults().resize('logs', 68, 30)!;
       final swapped = layout.move('status', 0, 36)!;
-      expect(swapped['status'].y, 34);
-      expect(swapped['status'].height, 84);
+      expect(swapped['status'].y, 31);
+      expect(swapped['status'].height, 87);
       expect(swapped['logs'].y, 0);
       expect(swapped['logs'].width, 68);
       expect(swapped['logs'].height, 30);
@@ -88,11 +110,11 @@ void main() {
     () {
       final swapped = HomeLayout.defaults().move('subscription', 78, 32)!;
       expect(swapped['traffic'].y, 0);
-      expect(swapped['traffic'].height, 44);
-      expect(swapped['subscription'].y, 48);
-      expect(swapped['subscription'].height, 28);
+      expect(swapped['traffic'].height, 51);
+      expect(swapped['subscription'].y, 52);
+      expect(swapped['subscription'].height, 31);
       expect(HomeLayout.tryDecode(swapped.encode()), isNotNull);
-      final back = swapped.move('traffic', 78, 48)!;
+      final back = swapped.move('traffic', 78, 52)!;
       expect(back['subscription'].y, 0);
       expect(back['traffic'].y, 32);
     },
@@ -162,8 +184,8 @@ void main() {
     );
     expect(layout['subscription'].x, 0);
     expect(layout['traffic'].x, 0);
-    expect(layout['status'].x, 44);
-    expect(layout['logs'].x, 44);
+    expect(layout['status'].x, 42);
+    expect(layout['logs'].x, 42);
     expect(layout['tun'].x, 0);
     expect(layout['systemProxy'].x, 40);
     expect(layout['clearProxy'].x, 80);

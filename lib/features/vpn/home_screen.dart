@@ -12,7 +12,9 @@ import '../../core/localization/app_strings.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_surface.dart';
+import '../../core/widgets/clay_surface.dart';
 import '../../core/widgets/glass_dialog.dart';
+import '../../core/widgets/glass_menu.dart';
 import '../../core/widgets/country_flag_badge.dart';
 import '../../core/widgets/interactive_depth.dart';
 import '../../core/widgets/operation_error.dart';
@@ -25,7 +27,8 @@ import '../../core/desktop_feedback.dart';
 import 'traffic_panel.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.onNavigationPreviewChanged});
+  final ValueChanged<String?>? onNavigationPreviewChanged;
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
@@ -39,6 +42,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void updateDraft(Map<String, Object?> values) {
     if (_savingLayout || _editSettings == null) return;
     setState(() => _editSettings = _editSettings!.withUpdates(values));
+    if (values.containsKey('navigationPosition')) {
+      widget.onNavigationPreviewChanged?.call(
+        _editSettings!.resolvedNavigationPosition,
+      );
+    }
   }
 
   Future<void> saveLayout(AppController controller) async {
@@ -49,13 +57,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       await controller.updateSettings({
         'homeLayout': HomeLayout.fromSettings(draft).encode(),
         'showRecentLogsOnHome': draft.showRecentLogsOnHome,
+        'navigationPosition': draft.resolvedNavigationPosition,
       });
       if (_resetWindowOnSave) {
-        await const MethodChannel('dev.niran.windows/host')
-            .invokeMethod<void>('resetWindowBounds');
+        await const MethodChannel(
+          'dev.niran.windows/host',
+        ).invokeMethod<void>('resetWindowBounds');
         _resetWindowOnSave = false;
       }
       if (mounted) setState(() => _editSettings = null);
+      widget.onNavigationPreviewChanged?.call(null);
       unawaited(
         DesktopFeedback.show(
           sound: draft.soundEffects,
@@ -113,7 +124,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         key: const Key('home-content'),
         constraints: const BoxConstraints(maxWidth: 1160, maxHeight: 760),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            6,
+            16,
+            12 + MediaQuery.paddingOf(context).bottom,
+          ),
           child: LayoutBuilder(
             builder: (context, constraints) {
               final compact =
@@ -132,6 +148,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (editing) ...[
+                          GlassActionMenu<String>(
+                            key: const Key('navigation-placement'),
+                            tooltip: context.s('navigationPlacement'),
+                            icon: const Icon(Icons.space_dashboard_outlined),
+                            onSelected: (position) =>
+                                updateDraft({'navigationPosition': position}),
+                            items: [
+                              for (final position in [
+                                'left',
+                                'right',
+                                'bottom',
+                              ])
+                                GlassMenuItem(
+                                  value: position,
+                                  icon:
+                                      app.settings.resolvedNavigationPosition ==
+                                          position
+                                      ? Icons.check_rounded
+                                      : switch (position) {
+                                          'left' =>
+                                            Icons.vertical_split_rounded,
+                                          'right' => Icons.view_sidebar_rounded,
+                                          _ => Icons.space_bar_rounded,
+                                        },
+                                  label: context.s('navigation$position'),
+                                ),
+                            ],
+                          ),
                           IconButton(
                             key: const Key('reset-home-layout'),
                             color: Theme.of(context).colorScheme.error,
@@ -152,10 +196,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             key: const Key('cancel-home-edit'),
                             onPressed: _savingLayout
                                 ? null
-                                : () => setState(() {
-                                    _editSettings = null;
-                                    _resetWindowOnSave = false;
-                                  }),
+                                : () {
+                                    widget.onNavigationPreviewChanged?.call(
+                                      null,
+                                    );
+                                    setState(() {
+                                      _editSettings = null;
+                                      _resetWindowOnSave = false;
+                                    });
+                                  },
                             child: Text(context.s('cancelHomeEdit')),
                           ),
                           FilledButton(
@@ -279,227 +328,306 @@ class _ConnectionCard extends StatelessWidget {
         : countryCode != null && countryCode.length == 2
         ? '($countryCode) $publicIp'
         : publicIp;
-    return GlassSurface(
-      radius: 24,
-      style: GlassSurfaceStyle.flat,
-      padding: EdgeInsets.all(compact ? 16 : 24),
-      child: _BoundedHomeContent(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              height: 140,
-              child: HomeCanvas(
-                controlsOnly: true,
-                heading: Row(
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final tight = bounds.maxHeight < 350;
+        final veryTight = bounds.maxHeight < 300;
+        return GlassSurface(
+          radius: 24,
+          style: GlassSurfaceStyle.flat,
+          padding: EdgeInsets.all(
+            veryTight
+                ? 5
+                : tight
+                ? 12
+                : compact
+                ? 16
+                : 24,
+          ),
+          child: LayoutBuilder(
+            builder: (context, inner) => FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.topStart,
+              child: SizedBox(
+                width: inner.maxWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _ConnectionEmblem(
-                      color: statusColor,
-                      connected: connection.isConnected,
-                      editing: editing,
-                    ),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            context.s('status'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelMedium,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            context.s(connection.state),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: statusColor,
+                    SizedBox(
+                      // Keep useful control geometry even when a custom card
+                      // is short; the outer scaleDown fits the complete card.
+                      height:
+                          (tight ? 110.0 : 126.0) *
+                          (MediaQuery.textScalerOf(context).scale(14) / 14)
+                              .clamp(1.0, 2.0),
+                      child: HomeCanvas(
+                        controlsOnly: true,
+                        heading: Row(
+                          children: [
+                            _ConnectionEmblem(
+                              color: statusColor,
+                              connected: connection.isConnected,
+                              editing: editing,
+                            ),
+                            const SizedBox(width: 11),
+                            Expanded(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: AlignmentDirectional.centerStart,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      context.s('status'),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.labelMedium,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      context.s(connection.state),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: statusColor,
+                                          ),
+                                    ),
+                                  ],
                                 ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        layout: layout,
+                        editing: editing,
+                        logsVisible: false,
+                        labels: labels,
+                        onChanged: onLayoutChanged,
+                        onRemoveLogs: () {},
+                        children: {
+                          'systemProxy': _HomeAction(
+                            clay: true,
+                            selected: app.settings.systemProxyState == 'niran',
+                            icon: Icons.desktop_windows_rounded,
+                            label: labels['systemProxy']!,
+                            onPressed:
+                                !editing &&
+                                    connection.isConnected &&
+                                    !connection.isBusy
+                                ? () => _runProxyAction(
+                                    context,
+                                    controller.setSystemProxy,
+                                    context.s('systemProxyEnabledToast'),
+                                  )
+                                : null,
+                          ),
+                          'clearProxy': _HomeAction(
+                            clay: true,
+                            selected: app.settings.systemProxyState == 'clear',
+                            icon: Icons.cleaning_services_outlined,
+                            label: labels['clearProxy']!,
+                            onPressed: !editing && !connection.isBusy
+                                ? () => _runProxyAction(
+                                    context,
+                                    controller.clearSystemProxy,
+                                    context.s('systemProxyClearedToast'),
+                                  )
+                                : null,
+                          ),
+                          'tun': _TunControl(
+                            value: app.settings.isTunEnabled,
+                            enabled: !editing && !connection.isBusy,
+                            onChanged: (value) => _perform(
+                              context,
+                              () => controller.updateSettings({
+                                'tunEnabled': value,
+                              }),
+                            ),
+                          ),
+                          'restart':
+                              !connection.isConnected &&
+                                  connection.state != 'restarting'
+                              ? IgnorePointer(
+                                  ignoring: editing,
+                                  child: Center(
+                                    child: _ConnectionAction(
+                                      connection: connection,
+                                      enabled: selected != null,
+                                      controller: controller,
+                                      settings: app.settings,
+                                    ),
+                                  ),
+                                )
+                              : _HomeAction(
+                                  selected: false,
+                                  accent: Colors.blueAccent,
+                                  icon: Icons.restart_alt_rounded,
+                                  label: labels['restart']!,
+                                  onPressed:
+                                      !editing &&
+                                          connection.isConnected &&
+                                          !connection.isBusy
+                                      ? () => _perform(
+                                          context,
+                                          controller.restartService,
+                                        )
+                                      : null,
+                                ),
+                        },
+                      ),
+                    ),
+                    if (connection.error?.isNotEmpty == true) ...[
+                      SizedBox(height: veryTight ? 4 : 8),
+                      Tooltip(
+                        message: connection.error!,
+                        child: Text(
+                          connection.error!,
+                          maxLines: veryTight ? 1 : 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    ],
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        vertical: veryTight
+                            ? 3
+                            : tight
+                            ? 7
+                            : 10,
+                      ),
+                      child: const Divider(height: 1),
+                    ),
+                    if (!veryTight)
+                      Text(
+                        context.s('selectedServer').toUpperCase(),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelSmall?.copyWith(letterSpacing: .75),
+                      ),
+                    if (!veryTight) SizedBox(height: tight ? 5 : 9),
+                    if (selected == null)
+                      Text(
+                        app.subscriptionConfigured
+                            ? context.s('emptyServers')
+                            : context.s('notConfigured'),
+                      )
+                    else ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Tooltip(
+                                  message:
+                                      '${selected.protocol} · ${selected.transport} · ${selected.security}',
+                                  child: CountryRemarkText(
+                                    remark: selected.name,
+                                    fallbackCountry: selected.country,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                if (!veryTight)
+                                  Text(
+                                    '${selected.protocol} · ${selected.transport} · ${selected.security}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
+                      SizedBox(height: tight ? 8 : 12),
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: _CompactMetric(
+                                compact: tight,
+                                icon: Icons.public_rounded,
+                                label: context.s('publicIp'),
+                                value: publicIpValue,
+                                subtitle: connection.publicCity,
+                                fitValue: true,
+                                onTap:
+                                    !editing &&
+                                        connection.isConnected &&
+                                        !connection.isBusy
+                                    ? () => _perform(
+                                        context,
+                                        controller.refreshPublicIp,
+                                      )
+                                    : null,
+                                tooltip: context.s('refreshIpHint'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: _CompactMetric(
+                                compact: tight,
+                                icon: Icons.network_ping_rounded,
+                                valueColor: switch (selected.status) {
+                                  'failed' || 'timeout' => Theme.of(
+                                    context,
+                                  ).colorScheme.error,
+                                  'testing' => context.semanticColors.warning,
+                                  _ =>
+                                    selected.ping == null
+                                        ? Theme.of(context).colorScheme.outline
+                                        : selected.ping! < 150
+                                        ? context.semanticColors.success
+                                        : selected.ping! < 350
+                                        ? context.semanticColors.warning
+                                        : Theme.of(context).colorScheme.error,
+                                },
+                                label: context.s('ping'),
+                                value: switch (selected.status) {
+                                  'testing' => context.s('testing'),
+                                  'timeout' => context.s('timeout'),
+                                  'failed' => context.s('failed'),
+                                  _ =>
+                                    selected.ping == null
+                                        ? '—'
+                                        : '${selected.ping} ms',
+                                },
+                                onTap: editing || app.isPinging
+                                    ? null
+                                    : () => _perform(
+                                        context,
+                                        () =>
+                                            controller.pingServer(selected.id),
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-                layout: layout,
-                editing: editing,
-                logsVisible: false,
-                labels: labels,
-                onChanged: onLayoutChanged,
-                onRemoveLogs: () {},
-                children: {
-                  'systemProxy': _HomeAction(
-                    selected: app.settings.systemProxyState == 'niran',
-                    icon: Icons.desktop_windows_rounded,
-                    label: labels['systemProxy']!,
-                    onPressed:
-                        !editing && connection.isConnected && !connection.isBusy
-                        ? () => _runProxyAction(
-                            context,
-                            controller.setSystemProxy,
-                            context.s('systemProxyEnabledToast'),
-                          )
-                        : null,
-                  ),
-                  'clearProxy': _HomeAction(
-                    selected: app.settings.systemProxyState == 'clear',
-                    icon: Icons.cleaning_services_outlined,
-                    label: labels['clearProxy']!,
-                    onPressed: !editing && !connection.isBusy
-                        ? () => _runProxyAction(
-                            context,
-                            controller.clearSystemProxy,
-                            context.s('systemProxyClearedToast'),
-                          )
-                        : null,
-                  ),
-                  'tun': _TunControl(
-                    value: app.settings.isTunEnabled,
-                    enabled: !editing && !connection.isBusy,
-                    onChanged: (value) => _perform(
-                      context,
-                      () => controller.updateSettings({'tunEnabled': value}),
-                    ),
-                  ),
-                  'restart': _HomeAction(
-                    selected: false,
-                    accent: Colors.blueAccent,
-                    icon: Icons.restart_alt_rounded,
-                    label: labels['restart']!,
-                    onPressed:
-                        !editing && connection.isConnected && !connection.isBusy
-                        ? () => _perform(context, controller.restartService)
-                        : null,
-                  ),
-                },
               ),
             ),
-            if (connection.error?.isNotEmpty == true) ...[
-              const SizedBox(height: 8),
-              Text(
-                connection.error!,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-            if (!connection.isConnected && !connection.isBusy)
-              Align(
-                alignment: AlignmentDirectional.centerEnd,
-                child: IgnorePointer(
-                  ignoring: editing,
-                  child: _ConnectionAction(
-                    connection: connection,
-                    enabled: selected != null,
-                    controller: controller,
-                    settings: app.settings,
-                  ),
-                ),
-              ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Divider(),
-            ),
-            Text(
-              context.s('selectedServer').toUpperCase(),
-              style: Theme.of(context).textTheme.labelSmall
-                  ?.copyWith(letterSpacing: .75),
-            ),
-            const SizedBox(height: 9),
-            if (selected == null)
-              Text(
-                app.subscriptionConfigured
-                    ? context.s('emptyServers')
-                    : context.s('notConfigured'),
-              )
-            else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CountryRemarkText(
-                          remark: selected.name,
-                          fallbackCountry: selected.country,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${selected.protocol} · ${selected.transport} · ${selected.security}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: _CompactMetric(
-                      icon: Icons.public_rounded,
-                      label: context.s('publicIp'),
-                      value: publicIpValue,
-                      subtitle: connection.publicCity,
-                      fitValue: true,
-                      onTap:
-                          !editing &&
-                              connection.isConnected &&
-                              !connection.isBusy
-                          ? () => _perform(context, controller.refreshPublicIp)
-                          : null,
-                      tooltip: context.s('refreshIpHint'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _CompactMetric(
-                      icon: Icons.network_ping_rounded,
-                      valueColor: switch (selected.status) {
-                        'failed' ||
-                        'timeout' => Theme.of(context).colorScheme.error,
-                        'testing' => context.semanticColors.warning,
-                        _ =>
-                          selected.ping == null
-                              ? Theme.of(context).colorScheme.outline
-                              : selected.ping! < 150
-                              ? context.semanticColors.success
-                              : selected.ping! < 350
-                              ? context.semanticColors.warning
-                              : Theme.of(context).colorScheme.error,
-                      },
-                      label: context.s('ping'),
-                      value: switch (selected.status) {
-                        'testing' => context.s('testing'),
-                        'timeout' => context.s('timeout'),
-                        'failed' => context.s('failed'),
-                        _ =>
-                          selected.ping == null ? '—' : '${selected.ping} ms',
-                      },
-                      onTap: editing || app.isPinging
-                          ? null
-                          : () => _perform(
-                              context,
-                              () => controller.pingServer(selected.id),
-                            ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -687,22 +815,25 @@ class _HomeAction extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.accent,
+    this.clay = false,
   });
   final bool selected;
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
   final Color? accent;
+  final bool clay;
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return InteractiveDepth(
       radius: 24,
       enabled: onPressed != null,
-      child: GlassSurface(
-        radius: 24,
-        blur: 12,
-        child: Semantics(
+      hoverLift: clay ? 3 : 0,
+      tiltEnabled: !clay,
+      child: _material(
+        context,
+        Semantics(
           button: true,
           enabled: onPressed != null,
           selected: selected,
@@ -749,6 +880,16 @@ class _HomeAction extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _material(BuildContext context, Widget child) {
+    if (!clay) return GlassSurface(radius: 24, blur: 12, child: child);
+    return ClaySurface(
+      radius: 24,
+      selected: selected,
+      raised: true,
+      child: child,
     );
   }
 }
@@ -882,25 +1023,6 @@ class _ConnectionEmblemState extends State<_ConnectionEmblem>
   );
 }
 
-class _BoundedHomeContent extends StatelessWidget {
-  const _BoundedHomeContent({required this.child});
-  final Widget child;
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      // Natural content height handles wrapping without scaling typography.
-      // Only this card scrolls when its contents exceed the available height.
-      return SingleChildScrollView(
-        primary: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-          child: child,
-        ),
-      );
-    },
-  );
-}
-
 class _CompactMetric extends StatelessWidget {
   const _CompactMetric({
     required this.icon,
@@ -911,6 +1033,7 @@ class _CompactMetric extends StatelessWidget {
     this.fitValue = false,
     this.tooltip,
     this.valueColor,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -921,6 +1044,7 @@ class _CompactMetric extends StatelessWidget {
   final bool fitValue;
   final String? tooltip;
   final Color? valueColor;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -929,11 +1053,15 @@ class _CompactMetric extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(11),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
-        constraints: const BoxConstraints(minHeight: 76),
+        padding: EdgeInsets.symmetric(
+          horizontal: 11,
+          vertical: compact ? 6 : 10,
+        ),
+        constraints: BoxConstraints(minHeight: compact ? 58 : 76),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest
-              .withValues(alpha: .45),
+          color: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest.withValues(alpha: .45),
           borderRadius: BorderRadius.circular(11),
           border: Border.all(
             color: Theme.of(context).colorScheme.outline.withValues(alpha: .28),
@@ -964,8 +1092,9 @@ class _CompactMetric extends StatelessWidget {
                       alignment: AlignmentDirectional.centerStart,
                       child: Text(
                         value,
-                        style: Theme.of(context).textTheme.labelLarge
-                            ?.copyWith(color: valueColor),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: valueColor),
                       ),
                     )
                   else
@@ -973,17 +1102,22 @@ class _CompactMetric extends StatelessWidget {
                       value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelLarge
-                          ?.copyWith(color: valueColor),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelLarge?.copyWith(color: valueColor),
                     ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle?.trim().isNotEmpty == true ? subtitle!.trim() : '',
-                    maxLines: 1,
-                    overflow: TextOverflow.fade,
-                    softWrap: false,
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
+                  if (subtitle?.trim().isNotEmpty == true) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle?.trim().isNotEmpty == true
+                          ? subtitle!.trim()
+                          : '',
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                      softWrap: false,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1014,77 +1148,90 @@ class _SubscriptionSection extends StatelessWidget {
             horizontal: 14,
             vertical: compact ? 7 : 12,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.data_usage_rounded,
-                    size: 17,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      context.s('subscriptionUsage'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: compact ? 4 : 10),
-              if (usage.used == null && !usage.unlimited)
-                Text(
-                  context.s('subscriptionUsageUnknown'),
-                  maxLines: 2,
-                  style: Theme.of(context).textTheme.bodySmall,
-                )
-              else ...[
-                Row(
+          child: LayoutBuilder(
+            builder: (context, inner) => FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.topStart,
+              child: SizedBox(
+                width: inner.maxWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '${context.s('used')}: ${formatBytes(usage.used)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.data_usage_rounded,
+                          size: 17,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            context.s('subscriptionUsage'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${context.s('remaining')}: '
-                        '${usage.unlimited ? context.s('unlimited') : formatBytes(usage.remaining)}',
-                        textAlign: TextAlign.end,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
+                    SizedBox(height: compact ? 4 : 10),
+                    if (usage.used == null && !usage.unlimited)
+                      Tooltip(
+                        message: context.s('subscriptionUsageUnknown'),
+                        child: Text(
+                          context.s('subscriptionUsageUnknown'),
+                          maxLines: compact ? 1 : 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      )
+                    else ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${context.s('used')}: ${formatBytes(usage.used)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${context.s('remaining')}: '
+                              '${usage.unlimited ? context.s('unlimited') : formatBytes(usage.remaining)}',
+                              textAlign: TextAlign.end,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
+                      if (progress != null) ReplayUsageBar(value: progress),
+                      if (usage.expire != null &&
+                          usage.expire! > 0 &&
+                          bounds.maxHeight >= 116)
+                        Text(
+                          '${context.s('expires')}: ${formatDateTime(usage.expire! * 1000, dateOnly: true)}',
+                          maxLines: 1,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      if (usage.expired && bounds.maxHeight >= 130)
+                        Text(
+                          context.s('expired'),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                    ],
                   ],
                 ),
-                if (progress != null) ReplayUsageBar(value: progress),
-                if (usage.expire != null &&
-                    usage.expire! > 0 &&
-                    bounds.maxHeight >= 116)
-                  Text(
-                    '${context.s('expires')}: ${formatDateTime(usage.expire! * 1000, dateOnly: true)}',
-                    maxLines: 1,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                if (usage.expired && bounds.maxHeight >= 130)
-                  Text(
-                    context.s('expired'),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-              ],
-            ],
+              ),
+            ),
           ),
         );
       },
@@ -1112,8 +1259,9 @@ Future<void> _runProxyAction(
   try {
     await operation();
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(successMessage)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(successMessage)));
     }
   } catch (error) {
     if (context.mounted) await showOperationError(context, error);

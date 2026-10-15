@@ -2,6 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+abstract interface class WindowsRestartHostApi {
+  Future<void> restartApplication();
+}
+
 abstract interface class WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getBuildConfig();
   Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo();
@@ -35,7 +39,8 @@ abstract interface class WindowsNativeHostApi {
   Future<void> openExternalUrl(String url);
 }
 
-final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
+final class MethodChannelWindowsNativeHost
+    implements WindowsNativeHostApi, WindowsRestartHostApi {
   static const _channel = MethodChannel('dev.niran.windows/host');
   final _trayActions = StreamController<String>.broadcast(sync: true);
 
@@ -76,6 +81,9 @@ final class MethodChannelWindowsNativeHost implements WindowsNativeHostApi {
 
   @override
   Future<void> exitApplication() => _channel.invokeMethod('exitApplication');
+  @override
+  Future<void> restartApplication() =>
+      _channel.invokeMethod('restartApplication');
 
   @override
   Future<void> validateTunPrerequisites() =>

@@ -257,16 +257,24 @@ void main() {
     }
   });
 
-  test('performance themes use solid backgrounds without a gradient', () {
-    for (final theme in [AppTheme.lightPerformance, AppTheme.darkPerformance]) {
-      final decoration = NirangVisualEffects.shellBackground(
-        theme,
-        reducedEffects: true,
-      );
-      expect(decoration.gradient, isNull);
-      expect(decoration.color, theme.scaffoldBackgroundColor);
-    }
-  });
+  test(
+    'performance keeps the inexpensive opaque background colour lighting',
+    () {
+      for (final theme in [
+        AppTheme.lightPerformance,
+        AppTheme.darkPerformance,
+      ]) {
+        final decoration = NirangVisualEffects.shellBackground(
+          theme,
+          reducedEffects: true,
+        );
+        expect(decoration.gradient, isA<RadialGradient>());
+        final gradient = decoration.gradient! as RadialGradient;
+        expect(gradient.colors.every((color) => color.a == 1), isTrue);
+        expect(gradient.colors.toSet().length, greaterThan(1));
+      }
+    },
+  );
 
   testWidgets('Persian localization is RTL and translated', (tester) async {
     await tester.pumpWidget(

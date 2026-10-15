@@ -94,6 +94,18 @@ class TrafficPanel extends ConsumerWidget {
             ),
             const SizedBox(height: 6),
             Tooltip(
+              message: context.s('trafficMonthHint'),
+              child: _TrafficRow(
+                label: context.s('allConfigsMonth'),
+                value: formatBytes(
+                  sum(
+                    traffic?.aggregateMonthUpload,
+                    traffic?.aggregateMonthDownload,
+                  ),
+                ),
+              ),
+            ),
+            Tooltip(
               message: context.s('trafficScopeHint'),
               child: Text(
                 context.s(

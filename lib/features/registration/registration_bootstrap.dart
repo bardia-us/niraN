@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../../core/registration/device_registration.dart';
+import '../../core/startup_trace.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/platform/nirang_native.dart';
 import '../../core/update_checker.dart';
-import '../../core/widgets/brand_mark.dart';
+import '../../core/widgets/startup_loading.dart';
 import '../../core/windows_update_manager.dart';
 import '../../platform/windows/windows_device_registration.dart';
 import '../../platform/windows/windows_native_host.dart';
@@ -15,12 +17,20 @@ class NiranRegistrationBootstrap extends StatefulWidget {
     required this.child,
     DeviceRegistrationCoordinator? coordinator,
     this.graphicsReady,
+    this.firstFrameRasterized,
+    this.prepareGraphics,
     super.key,
   }) : coordinator = coordinator ?? windowsRemoteAccess;
 
   final Widget child;
   final DeviceRegistrationCoordinator coordinator;
   final Future<void>? graphicsReady;
+
+  /// Platform raster acknowledgement; layout alone is not GPU completion.
+  final Future<void>? firstFrameRasterized;
+
+  /// Optional programs start only after the lightweight loading frame paints.
+  final Future<void> Function()? prepareGraphics;
 
   @override
   State<NiranRegistrationBootstrap> createState() =>
@@ -30,13 +40,49 @@ class NiranRegistrationBootstrap extends StatefulWidget {
 class _NiranRegistrationBootstrapState
     extends State<NiranRegistrationBootstrap> {
   late Future<bool> _initialization;
+  late Future<void> _graphicsReady;
+  StartupStage _startupStage = StartupStage.device;
   bool _accepting = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    _graphicsReady =
+        (widget.graphicsReady?.timeout(
+                  const Duration(seconds: 3),
+                  onTimeout: () {},
+                ) ??
+                _prepareGraphics())
+            .catchError((Object _) {});
     _initialization = _verifyAccess();
+  }
+
+  Future<void> _prepareGraphics() async {
+    if (widget.prepareGraphics == null) return;
+    await WidgetsBinding.instance.endOfFrame;
+    final raster = widget.firstFrameRasterized;
+    if (raster != null) {
+      final completed = await raster
+          .then((_) => true)
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+      // A missing engine acknowledgement must neither trap access nor start
+      // optional GPU work before the loading frame. Keep the fallback session.
+      if (!completed) return;
+    }
+    if (!mounted) return;
+    StartupTrace.mark(StartupPhase.graphicsStarted);
+    await widget.prepareGraphics?.call().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () {},
+    );
+    StartupTrace.mark(StartupPhase.graphicsFinished);
+  }
+
+  void _showStartupStage(StartupStage stage) {
+    if (mounted && _startupStage != stage) {
+      setState(() => _startupStage = stage);
+    }
   }
 
   @override
@@ -44,7 +90,7 @@ class _NiranRegistrationBootstrapState
     future: _initialization,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return _consentApp(const _StartupLoadingScreen());
+        return _consentApp(StartupLoadingScreen(stage: _startupStage));
       }
       final error = snapshot.error;
       if (_isBlocked(error)) markDeviceAccessBlocked(_errorMessage(error));
@@ -98,11 +144,18 @@ class _NiranRegistrationBootstrapState
   );
 
   Future<bool> _verifyAccess() async {
+    StartupTrace.mark(StartupPhase.deviceCheckStarted);
     final accepted = await widget.coordinator.initialize();
+    StartupTrace.mark(StartupPhase.deviceCheckFinished);
     if (accepted) {
       clearDeviceAccessBlocked();
       final coordinator = widget.coordinator;
-      if (coordinator is RemoteAccessController) {
+      final cached =
+          coordinator is WindowsRemoteAccessService &&
+          coordinator.hasCachedAllowedAccess;
+      if (coordinator is RemoteAccessController && !cached) {
+        _showStartupStage(StartupStage.access);
+        StartupTrace.mark(StartupPhase.accessCheckStarted);
         try {
           await (coordinator as RemoteAccessController).requireAllowed();
         } on DeviceAccessException {
@@ -111,9 +164,12 @@ class _NiranRegistrationBootstrapState
           // A temporary network/DNS/timeout failure must not create a false
           // mandatory-update lock. Cached allowed access remains usable.
         }
+        StartupTrace.mark(StartupPhase.accessCheckFinished);
       }
-      await widget.graphicsReady;
+      _showStartupStage(StartupStage.graphics);
+      await _graphicsReady;
       clearDeviceAccessBlocked();
+      StartupTrace.mark(StartupPhase.authorizedUiReady);
     }
     return accepted;
   }
@@ -128,8 +184,10 @@ class _NiranRegistrationBootstrapState
   Future<bool> _retryAccess() async {
     final coordinator = widget.coordinator;
     if (coordinator is! RemoteAccessController) return _verifyAccess();
+    _showStartupStage(StartupStage.access);
     await (coordinator as RemoteAccessController).requireAllowed();
-    await widget.graphicsReady;
+    _showStartupStage(StartupStage.graphics);
+    await _graphicsReady;
     clearDeviceAccessBlocked();
     return true;
   }
@@ -140,6 +198,12 @@ class _NiranRegistrationBootstrapState
     theme: AppTheme.light,
     darkTheme: AppTheme.dark,
     themeMode: ThemeMode.system,
+    supportedLocales: const [Locale('en'), Locale('fa')],
+    localizationsDelegates: const [
+      GlobalMaterialLocalizations.delegate,
+      GlobalWidgetsLocalizations.delegate,
+      GlobalCupertinoLocalizations.delegate,
+    ],
     home: home,
   );
 
@@ -163,7 +227,9 @@ class _NiranRegistrationBootstrapState
           return;
         }
         setState(() {
-          _error = error is DeviceAccessException ? error.message : 'Device registration failed. Check your connection and try again.';
+          _error = error is DeviceAccessException
+              ? error.message
+              : 'Device registration failed. Check your connection and try again.';
         });
       }
     } finally {
@@ -191,34 +257,6 @@ class _NiranRegistrationBootstrapState
   static String _errorMessage(Object? error) => error is DeviceAccessException
       ? error.message
       : 'Access status could not be verified. Check your connection and try again.';
-}
-
-class _StartupLoadingScreen extends StatelessWidget {
-  const _StartupLoadingScreen();
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    body: DecoratedBox(
-      decoration: NirangVisualEffects.shellBackground(
-        Theme.of(context),
-        reducedEffects: false,
-      ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const BrandMark(),
-            const SizedBox(height: 14),
-            Text('niraN', style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 24),
-            const SizedBox(
-              width: 120,
-              child: LinearProgressIndicator(minHeight: 3),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
 }
 
 class MandatoryWindowsUpdateScreen extends StatefulWidget {
@@ -267,7 +305,8 @@ class _MandatoryWindowsUpdateScreenState
     } on Object {
       if (!mounted) return;
       setState(() {
-        _error = 'Could not load the verified Windows update. Check your internet connection or use the browser download.';
+        _error =
+            'Could not load the verified Windows update. Check your internet connection or use the browser download.';
         _loading = false;
       });
     }

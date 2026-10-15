@@ -25,6 +25,7 @@
 
 #include "private_config.h"
 #include "windows/runner/window_size_limits.h"
+#include "windows/runner/startup_trace.h"
 
 namespace niran {
 namespace {
@@ -461,9 +462,11 @@ std::pair<std::string, std::string> WindowsPublisherSystemIdentity() {
 WindowsBackendBridge::WindowsBackendBridge(flutter::BinaryMessenger* messenger,
                                            HWND window)
     : window_(window) {
+  TraceNativeStartup("proxy_recovery_started");
   if (proxy_.IsManaged()) {
     startup_proxy_recovered_ = proxy_.RecoverStale(&startup_proxy_error_);
   }
+  TraceNativeStartup("proxy_recovery_finished");
   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       messenger, "dev.niran.windows/host",
       &flutter::StandardMethodCodec::GetInstance());
@@ -602,6 +605,7 @@ void WindowsBackendBridge::HandleMethodCall(
     return;
   }
   if (method == "getDeviceRegistrationInfo") {
+    TraceNativeStartup("device_identity_started");
     const auto [system_id, system_id_source] =
         WindowsPublisherSystemIdentity();
     flutter::EncodableMap values;
@@ -617,6 +621,7 @@ void WindowsBackendBridge::HandleMethodCall(
         flutter::EncodableValue(system_id);
     values[flutter::EncodableValue("systemIdSource")] =
         flutter::EncodableValue(system_id_source);
+    TraceNativeStartup("device_identity_finished");
     result->Success(flutter::EncodableValue(values));
     return;
   }
@@ -666,9 +671,13 @@ void WindowsBackendBridge::HandleMethodCall(
     result->Success();
     return;
   }
-  if (method == "exitApplication") {
-    result->Success();
-    PostMessageW(window_, kExitApplicationMessage, 0, 0);
+  if (method == "exitApplication" || method == "restartApplication") {
+    if (PostMessageW(window_, kExitApplicationMessage,
+                    method == "restartApplication" ? 1 : 0, 0)) {
+      result->Success();
+    } else {
+      result->Error("exit_dispatch", "Windows could not queue application shutdown");
+    }
     return;
   }
   if (method == "validateTunPrerequisites") {

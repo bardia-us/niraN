@@ -10,12 +10,14 @@ import '../../core/widgets/settings_group.dart';
 import '../../core/widgets/desktop_page_heading.dart';
 import '../../core/widgets/operation_error.dart';
 import '../../core/widgets/telegram_mark.dart';
+import '../../core/widgets/niran_toast.dart';
 import '../../core/platform/native_models.dart';
 import '../../core/update_checker.dart';
 import '../../core/windows_update_manager.dart';
 import '../vpn/app_controller.dart';
 import '../vpn/home_layout.dart';
 import '../../platform/windows/windows_core_selection.dart';
+import 'performance_settings_section.dart';
 
 const _xrayResolutionStrategies = <String, String>{
   'AsIs': 'AsIs',
@@ -46,6 +48,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void initState() {
     super.initState();
     WindowsUpdateManager.instance.addListener(_handleUpdateManagerFocus);
+    // A navigation request may predate this page's first lazy mount.
+    _handleUpdateManagerFocus();
   }
 
   @override
@@ -130,12 +134,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
     return ListView(
       controller: _scrollController,
-      padding: EdgeInsets.fromLTRB(20, 6 + widget.topInset, 20, 24),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        6 + widget.topInset,
+        20,
+        24 + MediaQuery.paddingOf(context).bottom,
+      ),
       children: [
         DesktopPageHeading(
           title: context.s('settings'),
           subtitle: context.s('settingsOverview'),
         ),
+        const PerformanceSettingsSection(),
         SettingsGroup(
           title: context.s('tunSettings'),
           icon: Icons.vpn_lock_outlined,
@@ -449,8 +459,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ListTile(
               leading: const Icon(Icons.lan_outlined),
               title: Text(context.s('localBypass')),
-              subtitle: Text(context.s('localBypassHint')),
-              trailing: const Icon(Icons.check_circle_outline),
+              subtitle: Text(context.s('local${settings.localBypassMode}')),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () async {
+                final value = await _pickValue(
+                  context,
+                  title: context.s('localBypass'),
+                  current: settings.localBypassMode,
+                  values: {
+                    for (final mode in ['auto', 'bypass', 'proxy'])
+                      mode: context.s('local$mode'),
+                  },
+                );
+                if (!context.mounted || value == null) return;
+                await _perform(
+                  context,
+                  () => controller.updateSettings({'localBypassMode': value}),
+                );
+              },
             ),
             SwitchListTile(
               secondary: const Icon(Icons.route_outlined),
@@ -944,15 +970,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     )
                   : null,
             ),
-            SwitchListTile(
-              secondary: const Icon(Icons.view_sidebar_outlined),
-              title: Text(context.s('sidebarRight')),
-              value: settings.sidebarRight,
-              onChanged: (value) => _perform(
-                context,
-                () => controller.updateSettings({'sidebarRight': value}),
-              ),
-            ),
             ListTile(
               leading: const Icon(Icons.contrast_rounded),
               title: Text(context.s('theme')),
@@ -1144,8 +1161,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (accepted != true || !context.mounted) return;
     await _perform(context, controller.resetSettings);
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(context.s('settingsReset'))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.s('settingsReset'))));
     }
   }
 
@@ -1182,8 +1200,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final release = await const GitHubUpdateChecker().check(currentVersion);
       if (!context.mounted) return;
       if (!release.updateAvailable) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(context.s('upToDate'))));
+        showNiranToast(
+          context,
+          context.s('upToDate'),
+          icon: Icons.verified_rounded,
+        );
         return;
       }
       final updateManager = WindowsUpdateManager.instance;
@@ -1730,8 +1751,9 @@ bool _validFragmentRange(
   bool allowSingle = false,
 }) {
   final value = raw?.trim() ?? '';
-  final match = RegExp(allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$')
-      .firstMatch(value);
+  final match = RegExp(
+    allowSingle ? r'^(\d+)(?:-(\d+))?$' : r'^(\d+)-(\d+)$',
+  ).firstMatch(value);
   if (match == null) return false;
   final from = int.tryParse(match.group(1) ?? '');
   final to = int.tryParse(match.group(2) ?? match.group(1) ?? '');

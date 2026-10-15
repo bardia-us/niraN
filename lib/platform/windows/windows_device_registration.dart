@@ -8,6 +8,10 @@ final class WindowsDeviceRegistrationInfoProvider
 
   final WindowsNativeHostApi _host;
 
+  /// Version checks need build metadata only, not a TPM/publisher identity read.
+  Future<String> readAppVersion() async =>
+      '${(await _host.getBuildConfig())['appVersion'] ?? ''}';
+
   @override
   Future<DeviceRegistrationInfo> read() async {
     final values = await _host.getDeviceRegistrationInfo();

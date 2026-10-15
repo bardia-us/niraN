@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 
 import '../overlays/glass_menu.dart';
 import '../overlays/glass_modal_sheet.dart';
+import 'glass_navigation_shell.dart';
+import 'glass_vertical_bar.dart';
 
 /// How an item's glass background is drawn.
 ///
@@ -46,6 +48,31 @@ enum GlassBarItemBackground {
   own,
 }
 
+/// Whether an item moves into iPhone Duo's vertical bar strip.
+///
+/// Mirrors SwiftUI's `ToolbarItem.axisBehavior(_:)`. Only read where a
+/// [GlassNavigationShell] has resolved a strip; see [GlassVerticalBar].
+enum GlassBarItemAxisBehavior {
+  /// The system decides, as natively: icons go vertical, and custom content
+  /// stays behind in a horizontal capsule at the top-trailing corner of the
+  /// content, beside the title.
+  ///
+  /// [GlassBarItem.icon], [GlassBarItem.menu] and [GlassBarItem.sheet] go
+  /// vertical; [GlassBarItem.custom] stays horizontal.
+  automatic,
+
+  /// The item stays in the horizontal capsule even where its kind would go
+  /// vertical.
+  horizontalOnly,
+
+  /// The item goes vertical even where its kind would stay horizontal.
+  ///
+  /// For [GlassBarItem.custom] content that works squeezed to the strip's
+  /// 48pt width — an unread count, a small avatar. It is laid out at that
+  /// width and whatever height it asks for.
+  verticalPreferred,
+}
+
 /// A single item in a pinned navigation-bar cluster.
 ///
 /// Mirrors UIKit's `UIBarButtonItem`: items are declared as **data**, and the
@@ -86,6 +113,7 @@ sealed class GlassBarItem {
     bool enabled,
     GlassBarItemBackground background,
     Color? tintColor,
+    GlassBarItemAxisBehavior axisBehavior,
   }) = GlassBarIconItem;
 
   /// An arbitrary widget inside the pinned cluster.
@@ -109,6 +137,7 @@ sealed class GlassBarItem {
     bool enabled,
     GlassBarItemBackground background,
     Color? tintColor,
+    GlassBarItemAxisBehavior axisBehavior,
   }) = GlassBarCustomItem;
 
   /// An icon that opens a [GlassMenu] pull-down, mirroring
@@ -132,6 +161,7 @@ sealed class GlassBarItem {
     String? label,
     GlassBarItemBackground background,
     Color? tintColor,
+    GlassBarItemAxisBehavior axisBehavior,
   }) = GlassBarMenuItem;
 
   /// An icon whose tap presents a `GlassModalSheet` that morphs out of the
@@ -168,16 +198,16 @@ sealed class GlassBarItem {
     bool enabled,
     GlassBarItemBackground background,
     Color? tintColor,
+    GlassBarItemAxisBehavior axisBehavior,
   }) = GlassBarSheetItem;
 
   /// Splits the shared glass background, mirroring SwiftUI's
   /// `ToolbarSpacer(.fixed)` and UIKit's `UIBarButtonItem.fixedSpace`.
   ///
-  /// Items on either side of a spacer render in separate glass capsules.
-  ///
-  /// Currently parsed and validated but not yet rendered — a cluster
-  /// containing a spacer asserts in debug mode. Multi-capsule grouping is a
-  /// follow-up.
+  /// Items on either side of a spacer render in separate glass capsules, the
+  /// standard gap apart. Across a route transition each capsule follows its
+  /// items, matched by `id` where they have one, and a capsule that only one
+  /// route has buds out of the one beside it, or merges back into it.
   const factory GlassBarItem.spacer() = GlassBarSpacer;
 }
 
@@ -194,6 +224,7 @@ sealed class GlassBarActionItem extends GlassBarItem {
     this.enabled = true,
     this.background = GlassBarItemBackground.shared,
     this.tintColor,
+    this.axisBehavior = GlassBarItemAxisBehavior.automatic,
   });
 
   /// The tap handler for items that do not want one, mirroring
@@ -239,6 +270,22 @@ sealed class GlassBarActionItem extends GlassBarItem {
   /// [GlassBarItemBackground.shared] item asserts.
   final Color? tintColor;
 
+  /// Whether this item moves into iPhone Duo's vertical bar strip.
+  ///
+  /// Defaults to [GlassBarItemAxisBehavior.automatic]. Only read where a
+  /// [GlassNavigationShell] has resolved a strip.
+  final GlassBarItemAxisBehavior axisBehavior;
+
+  /// Whether this item goes into the vertical strip where there is one.
+  ///
+  /// Resolves [GlassBarItemAxisBehavior.automatic] by kind: everything but
+  /// custom content does.
+  bool get goesVertical => switch (axisBehavior) {
+        GlassBarItemAxisBehavior.verticalPreferred => true,
+        GlassBarItemAxisBehavior.horizontalOnly => false,
+        GlassBarItemAxisBehavior.automatic => this is! GlassBarCustomItem,
+      };
+
   /// The widget rendered inside the cluster.
   Widget get content;
 }
@@ -256,6 +303,7 @@ final class GlassBarIconItem extends GlassBarActionItem {
     super.enabled,
     super.background,
     super.tintColor,
+    super.axisBehavior,
   });
 
   /// The icon widget, typically an [Icon].
@@ -280,6 +328,7 @@ final class GlassBarCustomItem extends GlassBarActionItem {
     super.enabled,
     super.background,
     super.tintColor,
+    super.axisBehavior,
   });
 
   /// The widget rendered inside the cluster, measured at its intrinsic width.
@@ -304,6 +353,7 @@ final class GlassBarMenuItem extends GlassBarActionItem {
     super.label,
     super.background,
     super.tintColor,
+    super.axisBehavior,
   }) : super(onTap: GlassBarActionItem._noOp);
 
   /// The icon widget, typically an [Icon]. Conventionally an ellipsis.
@@ -342,6 +392,7 @@ final class GlassBarSheetItem extends GlassBarActionItem {
     super.enabled,
     super.background,
     super.tintColor,
+    super.axisBehavior,
   }) : super(onTap: GlassBarActionItem._noOp);
 
   /// The icon widget, typically an [Icon].

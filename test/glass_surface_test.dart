@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:niran/core/widgets/glass_surface.dart';
 
 void main() {
@@ -22,7 +23,7 @@ void main() {
     expect(find.byType(BackdropFilter), findsNothing);
   });
   for (final brightness in Brightness.values) {
-    testWidgets('glass has a legible material tint on $brightness', (
+    testWidgets('clear glass does not wash out backdrop colours on $brightness', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -39,17 +40,12 @@ void main() {
           ),
         ),
       );
-      final tints = tester.widgetList<ColoredBox>(
-        find.descendant(
-          of: find.byType(GlassSurface),
-          matching: find.byType(ColoredBox),
-        ),
-      );
+      final material = tester.widget<AdaptiveGlass>(find.byType(AdaptiveGlass));
       expect(
-        tints.any((box) => box.color.a >= .25 && box.color.a < .9),
-        isTrue,
+        material.settings.glassColor.a,
+        0,
         reason:
-            'Without a material tint the control disappears on a plain backdrop',
+            'Approved Clear Lens has no white/smoked tint; raster tests separately guard transmission',
       );
     });
   }

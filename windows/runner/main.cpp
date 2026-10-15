@@ -10,6 +10,8 @@
 #include "flutter_window.h"
 #include "window_size_limits.h"
 #include "utils.h"
+#include "startup_trace.h"
+#include "instance_mutex.h"
 #include "windows/proxy/system_proxy_manager.h"
 
 namespace {
@@ -140,15 +142,15 @@ void ApplySavedWindowBounds(HWND window) {
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  niran::TraceNativeStartup("runner_entry");
   if (HasArgument(L"--uninstall-cleanup")) {
     RunUninstallCleanup();
     return EXIT_SUCCESS;
   }
   HANDLE single_instance =
-      ::CreateMutexW(nullptr, TRUE, kInstanceMutex);
-  if (single_instance == nullptr || ::GetLastError() == ERROR_ALREADY_EXISTS) {
+      niran::AcquireInstanceMutex(kInstanceMutex);
+  if (single_instance == nullptr) {
     BringExistingInstanceToFront();
-    if (single_instance != nullptr) ::CloseHandle(single_instance);
     return EXIT_SUCCESS;
   }
   // Attach to console when present (e.g., 'flutter run') or create a
@@ -160,6 +162,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  niran::TraceNativeStartup("com_ready");
 
   flutter::DartProject project(L"data");
 
@@ -175,6 +178,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     return EXIT_FAILURE;
   }
   ApplySavedWindowBounds(window.GetHandle());
+  niran::TraceNativeStartup("window_created");
+  window.PresentStartup();
   window.SetQuitOnClose(true);
 
   ::MSG msg;
@@ -186,5 +191,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoUninitialize();
   ::ReleaseMutex(single_instance);
   ::CloseHandle(single_instance);
+  // Shutdown destroyed the old Flutter view and stopped cores before releasing
+  // the instance lock. Relaunch only now, never race a still-owned mutex.
+  if (window.RestartRequested()) {
+    niran::TraceNativeStartup("restart_launch_requested");
+    const std::wstring executable = CurrentExecutablePath();
+    const std::wstring directory = executable.substr(0, executable.find_last_of(L"\\/"));
+    const auto launched = ShellExecuteW(nullptr, L"open", executable.c_str(),
+        nullptr, directory.c_str(), SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(launched) <= 32) {
+      MessageBoxW(nullptr, L"The mode was saved, but niraN could not restart. Open niraN again.",
+          L"niraN", MB_OK | MB_ICONWARNING);
+    }
+  }
   return EXIT_SUCCESS;
 }

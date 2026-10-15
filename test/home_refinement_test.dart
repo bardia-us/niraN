@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:niran/core/platform/native_models.dart';
 import 'package:niran/features/vpn/app_controller.dart';
 import 'package:niran/features/vpn/home_screen.dart';
+import 'package:niran/features/vpn/home_layout.dart';
 import 'package:niran/main.dart';
 
 class HomeController extends AppController {
@@ -11,10 +12,12 @@ class HomeController extends AppController {
     this.legacyPerformance = false,
     this.language = 'en',
     this.connection = const ConnectionInfo(),
+    this.homeLayout = '',
   });
   final bool legacyPerformance;
   final String language;
   final ConnectionInfo connection;
+  final String homeLayout;
   int operationCalls = 0;
   @override
   Future<void> connect() async {
@@ -36,6 +39,7 @@ class HomeController extends AppController {
       performanceModePrompted: true,
       themeMode: 'light',
       language: language,
+      homeLayout: homeLayout,
     ),
     servers: const [
       ServerInfo(
@@ -111,6 +115,32 @@ void main() {
     expect(container.read(performanceModeProvider), isFalse);
     expect(find.text('Performance mode'), findsNothing);
   });
+  testWidgets(
+    'minimum custom status keeps controls visible with large Persian text',
+    (tester) async {
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final controller = HomeController(
+        language: 'fa',
+        homeLayout: HomeLayout.defaults().resize('status', 78, 66)!.encode(),
+        connection: const ConnectionInfo(
+          state: 'connected',
+          publicIp: '2001:db8::1',
+          publicCity: 'Frankfurt',
+          error: 'Retained diagnostic',
+        ),
+      );
+      await mount(tester, controller, size: const Size(800, 600));
+      final card = tester.getRect(find.byKey(const Key('home-tile-status')));
+      for (final id in HomeLayout.controlIds) {
+        final tile = tester.getRect(find.byKey(Key('home-tile-$id')));
+        expect(tile.height, greaterThan(24));
+        expect(card.contains(tile.topLeft), isTrue);
+        expect(card.contains(tile.bottomRight), isTrue);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets(
     'Persian connected edit mode fits minimum Windows size and Cancel stays unsaved',
     (tester) async {
