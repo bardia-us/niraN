@@ -3,8 +3,37 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:niran/platform/windows/windows_remote_access.dart';
 import 'package:niran/core/update_checker.dart';
+import 'package:niran/platform/windows/windows_access_diagnostics.dart';
 
 void main() {
+  test(
+    'registry logs stage and status without credentials on malformed body',
+    () async {
+      final response = _Response();
+      final client = _Client(response);
+      final events = <AccessDiagnostic>[];
+      final listener = WindowsAccessDiagnostics.events.listen(events.add);
+      await HttpOverrides.runZoned(() async {
+        final request = HttpsWindowsRegistryTransport().send({
+          'action': 'status',
+          'installation_id': 'PRIVATE_ID',
+        }, token: 'PRIVATE_TOKEN');
+        response.body.add([60, 104, 116, 109, 108, 62]);
+        unawaited(response.body.close());
+        await expectLater(request, throwsA(isA<FormatException>()));
+      }, createHttpClient: (_) => client);
+      await listener.cancel();
+      expect(
+        events.any((event) => event.status == 200 && event.stage == 'headers'),
+        isTrue,
+      );
+      expect(events.any((event) => event.error is FormatException), isTrue);
+      final text = events.map((event) => event.line).join();
+      expect(text, isNot(contains('PRIVATE')));
+      expect(text, isNot(contains('<html>')));
+      expect(client.forceClosed, isTrue);
+    },
+  );
   test('update check closes a stalled body at its total deadline', () async {
     final client = _Client(_Response());
     await HttpOverrides.runZoned(() async {

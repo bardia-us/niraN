@@ -85,6 +85,38 @@ String friendlyErrorMessage(BuildContext context, Object error) {
   }
   if (error is PlatformException) {
     return switch (error.code) {
+      'subscription_tls' => message(
+        'A secure connection to the API failed. Check the system date, certificates or HTTPS inspection. See Logs.',
+        'ارتباط امن با API برقرار نشد. تاریخ سیستم، گواهی‌ها یا بررسی HTTPS را کنترل کنید؛ جزئیات در Logs است.',
+      ),
+      'subscription_device' => message(
+        'Device registration or authorization failed. See AccessDiag in Logs; do not reset your data.',
+        'ثبت یا تأیید دستگاه انجام نشد. AccessDiag در Logs را بررسی کنید؛ اطلاعات را پاک نکنید.',
+      ),
+      'subscription_http' => message(
+        'The API returned an error. See the HTTP status in Logs.',
+        'API پاسخ خطا داد. کد HTTP در Logs ثبت شده است.',
+      ),
+      'subscription_format' => message(
+        'The API or subscription response is invalid. See Logs.',
+        'پاسخ API یا محتوای ساب معتبر نیست؛ Logs را بررسی کنید.',
+      ),
+      'subscription_storage' => message(
+        'Local data could not be read or saved. See Logs; do not delete your data.',
+        'خواندن یا ذخیرهٔ اطلاعات محلی انجام نشد؛ Logs را بررسی کنید و اطلاعات را پاک نکنید.',
+      ),
+      'subscription_timeout' => message(
+        'The API request timed out. A background network check is recorded in Logs.',
+        'مهلت درخواست API تمام شد. نتیجهٔ بررسی پس‌زمینهٔ شبکه در Logs ثبت می‌شود.',
+      ),
+      'subscription_socket' => message(
+        'The app could not reach the API. Network diagnostics are recorded in Logs.',
+        'اپ به API دسترسی پیدا نکرد. نتیجهٔ بررسی شبکه در Logs ثبت می‌شود.',
+      ),
+      'subscription_native' || 'subscription_unknown' => message(
+        'Subscription update failed. See AccessDiag in Logs for the failed stage.',
+        'به‌روزرسانی ساب انجام نشد؛ مرحلهٔ خطا را در AccessDiag بخش Logs ببینید.',
+      ),
       'unsupported_core_profile' => message(
         'This profile uses options unsupported by sing-box. Select Xray for this protocol in Settings.',
         'این کانفیگ گزینه‌های ناسازگار با sing-box دارد. در تنظیمات، هستهٔ این پروتکل را Xray انتخاب کنید.',

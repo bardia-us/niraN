@@ -2,6 +2,8 @@
 
 ## فارسی
 
+> **فایل‌های این نسخه در ۱۵ اکتبر جایگزین شدند.** اگر فایل قبلی 0.3.9 را دارید، بهتر است Setup یا پرتابل جدید را از همین صفحه دوباره دانلود کنید؛ به‌خصوص اگر ثبت دستگاه یا اولین دریافت ساب مشکل داشته است. تشخیص شبکه و پیام‌های خطای API/ساب دقیق‌تر شده‌اند. شمارهٔ نسخه تغییر نکرده، پس ممکن است آپدیتر داخل برنامه آپدیت تازه‌ای نشان ندهد. نیازی به Reset یا حذف اطلاعات نیست.
+
 نسخهٔ **0.3.9 — بیلد 13**؛ تغییرات نسبت به نسخهٔ عمومی 0.3.8:
 
 - بازطراحی Liquid Glass با ظاهر Clear Lens، منوهای متحرک، دکمه‌های Clay هماهنگ، hover خواناتر و اصلاح لبه‌ها و فوکوس منوها در تم روشن و تاریک.
@@ -14,6 +16,8 @@
 **دانلود:** Setup برای نصب/آپدیت با حفظ اطلاعات؛ Portable ZIP برای اجرا بدون نصب، پس از استخراج کامل پوشه. هر دو **Windows x64** و از یک بیلد هستند. برای آپدیت، ابتدا از Tray → Exit خارج شوید؛ نیازی به Reset یا حذف داده نیست. آمار ترافیک، اندازه‌گیری خود برنامه است نه صورتحساب سرویس‌دهنده. این انتشار ادعای رفع همهٔ مشکلات درایور یا پنجرهٔ سیاه روی تمام سیستم‌ها را ندارد.
 
 ## English
+
+> **Release files refreshed on October 15.** If you downloaded the earlier 0.3.9 files, we recommend downloading the refreshed Setup or portable package here, especially if device registration or the first subscription refresh failed. This revision improves network diagnostics and API/subscription error reporting. The version number is unchanged, so the in-app updater may not offer it automatically. No reset or data deletion is required.
 
 **0.3.9 — build 13**, compared with public release 0.3.8:
 

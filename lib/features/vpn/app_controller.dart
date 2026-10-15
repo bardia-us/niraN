@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/platform/native_models.dart';
@@ -8,6 +7,7 @@ import '../../core/platform/nirang_native.dart';
 import '../../core/registration/device_registration.dart';
 import '../../core/desktop_feedback.dart';
 import '../../core/startup_trace.dart';
+import '../../platform/windows/windows_access_diagnostics.dart';
 
 final appControllerProvider = AsyncNotifierProvider<AppController, AppSnapshot>(
   AppController.new,
@@ -89,11 +89,7 @@ class AppController extends AsyncNotifier<AppSnapshot> {
       );
     } catch (error) {
       _set((value) => value.copyWith(subscriptionError: _errorText(error)));
-      throw PlatformException(
-        code: 'subscription_refresh',
-        message:
-            'Subscription update failed. Check your connection and try again.',
-      );
+      throw AccessFailure.from(error).subscriptionException;
     } finally {
       _set((value) => value.copyWith(isRefreshing: false));
     }

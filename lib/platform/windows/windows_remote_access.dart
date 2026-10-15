@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import '../../core/registration/device_registration.dart';
 import 'windows_device_registration.dart';
 import 'windows_native_host.dart';
+import 'windows_access_diagnostics.dart';
 
 const _schemaVersion = 5;
 const _consentVersion = 3;
@@ -80,6 +81,11 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
     int maximumBytes = 8192,
   }) async {
     final client = HttpClient()..connectionTimeout = timeout;
+    final clock = Stopwatch()..start();
+    final operation = '${payload['action']}';
+    String stage = 'request';
+    int? httpStatus;
+    WindowsAccessDiagnostics.record(AccessDiagnostic(operation, stage));
     try {
       return await (() async {
         final request = await client.postUrl(endpoint);
@@ -99,6 +105,16 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
         }
         request.write(jsonEncode(payload));
         final response = await request.close();
+        httpStatus = response.statusCode;
+        stage = 'headers';
+        WindowsAccessDiagnostics.record(
+          AccessDiagnostic(
+            operation,
+            stage,
+            status: httpStatus,
+            elapsedMs: clock.elapsedMilliseconds,
+          ),
+        );
         final output = BytesBuilder(copy: false);
         await for (final chunk in response) {
           output.add(chunk);
@@ -107,6 +123,16 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
           }
         }
         final bytes = output.takeBytes();
+        stage = 'complete';
+        WindowsAccessDiagnostics.record(
+          AccessDiagnostic(
+            operation,
+            stage,
+            status: httpStatus,
+            elapsedMs: clock.elapsedMilliseconds,
+            byteCount: bytes.length,
+          ),
+        );
         Map<String, Object?>? json;
         if (response.headers.contentType?.mimeType == 'application/json' ||
             response.statusCode < 200 ||
@@ -123,6 +149,17 @@ final class HttpsWindowsRegistryTransport implements WindowsRegistryTransport {
           usageHeader: response.headers.value('subscription-userinfo'),
         );
       })().timeout(timeout);
+    } on Object catch (error) {
+      WindowsAccessDiagnostics.record(
+        AccessDiagnostic(
+          operation,
+          'failed',
+          error: error,
+          status: httpStatus,
+          elapsedMs: clock.elapsedMilliseconds,
+        ),
+      );
+      rethrow;
     } finally {
       client.close(force: true);
     }
@@ -230,6 +267,11 @@ final class WindowsRemoteAccessService
     _operation = operation;
     try {
       await operation;
+    } on Object catch (error) {
+      WindowsAccessDiagnostics.record(
+        AccessDiagnostic('status', 'local', error: error),
+      );
+      rethrow;
     } finally {
       if (identical(_operation, operation)) _operation = null;
     }
@@ -237,6 +279,17 @@ final class WindowsRemoteAccessService
 
   @override
   Future<RemoteSubscription> fetchSubscription() async {
+    try {
+      return await _fetchSubscription();
+    } on Object catch (error) {
+      WindowsAccessDiagnostics.record(
+        AccessDiagnostic('subscription', 'local', error: error),
+      );
+      rethrow;
+    }
+  }
+
+  Future<RemoteSubscription> _fetchSubscription() async {
     await _load();
     if (_record?['consent_accepted'] != true ||
         _record?['consent_version'] != _consentVersion) {
@@ -275,6 +328,17 @@ final class WindowsRemoteAccessService
   }
 
   Future<void> _register() async {
+    try {
+      await _registerOnce();
+    } on Object catch (error) {
+      WindowsAccessDiagnostics.record(
+        AccessDiagnostic('register', 'local', error: error),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> _registerOnce() async {
     final response = await _transport.send(await _registrationPayload());
     await _throwIfDenied(response);
     final token = '${response.json?['access_token'] ?? ''}';
@@ -424,6 +488,9 @@ final class WindowsRemoteAccessService
         'niraN must be updated to ${json?['minimum_version'] ?? '0.3.1'} or newer',
       );
     }
+    if (response.statusCode != HttpStatus.unauthorized) {
+      throw RegistryHttpFailure(response.statusCode);
+    }
     throw DeviceAccessException(reason, 'Device access could not be verified');
   }
 
@@ -460,7 +527,10 @@ final class WindowsRemoteAccessService
         _record = decoded.map((key, value) => MapEntry('$key', value));
         if (!protected) await _persist();
       }
-    } on Object {
+    } on Object catch (error) {
+      WindowsAccessDiagnostics.record(
+        AccessDiagnostic('register', 'local', error: error),
+      );
       _record = null;
     }
   }

@@ -6,6 +6,10 @@ abstract interface class WindowsRestartHostApi {
   Future<void> restartApplication();
 }
 
+abstract interface class WindowsNetworkStateHostApi {
+  Future<Map<dynamic, dynamic>> getNetworkState();
+}
+
 abstract interface class WindowsNativeHostApi {
   Future<Map<dynamic, dynamic>> getBuildConfig();
   Future<Map<dynamic, dynamic>> getDeviceRegistrationInfo();
@@ -40,7 +44,10 @@ abstract interface class WindowsNativeHostApi {
 }
 
 final class MethodChannelWindowsNativeHost
-    implements WindowsNativeHostApi, WindowsRestartHostApi {
+    implements
+        WindowsNativeHostApi,
+        WindowsRestartHostApi,
+        WindowsNetworkStateHostApi {
   static const _channel = MethodChannel('dev.niran.windows/host');
   final _trayActions = StreamController<String>.broadcast(sync: true);
 
@@ -54,6 +61,11 @@ final class MethodChannelWindowsNativeHost
   }
 
   Stream<String> get trayActions => _trayActions.stream;
+
+  @override
+  Future<Map<dynamic, dynamic>> getNetworkState() async =>
+      await _channel.invokeMethod<Map<dynamic, dynamic>>('getNetworkState') ??
+      {};
 
   @override
   Future<Map<dynamic, dynamic>> getBuildConfig() async =>

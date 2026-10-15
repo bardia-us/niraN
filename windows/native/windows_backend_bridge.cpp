@@ -11,6 +11,7 @@
 #include <mmsystem.h>
 #include <wincrypt.h>
 #include <security.h>
+#include <netlistmgr.h>
 #include <winrt/Windows.Security.Cryptography.h>
 #include <winrt/Windows.System.Profile.h>
 
@@ -83,6 +84,7 @@ struct AsyncCompletion {
   bool success = false;
   std::string error_code;
   std::string error_message;
+  flutter::EncodableValue value = flutter::EncodableValue(true);
 };
 
 std::string Utf8(const std::wstring& value) {
@@ -523,7 +525,7 @@ bool WindowsBackendBridge::HandleAsyncCompletion(LPARAM lparam) {
   if (completion == nullptr) return false;
   std::unique_ptr<AsyncCompletion> owned(completion);
   if (owned->success) {
-    owned->result->Success(flutter::EncodableValue(true));
+    owned->result->Success(owned->value);
   } else {
     owned->result->Error(owned->error_code, owned->error_message);
   }
@@ -587,6 +589,38 @@ void WindowsBackendBridge::HandleMethodCall(
       }
     }
     result->Success(flutter::EncodableValue(shown || played));
+    return;
+  }
+  if (method == "getNetworkState") {
+    // Read cached Windows connectivity off the platform thread. It is evidence,
+    // never permission to block an otherwise valid HTTPS request.
+    workers_.emplace_back([window = window_, result = std::move(result)]() mutable {
+      auto completion = std::make_unique<AsyncCompletion>();
+      completion->result = std::move(result);
+      completion->error_code = "network_state";
+      completion->error_message = "Windows connectivity is unavailable";
+      const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+      if (SUCCEEDED(apartment)) {
+        INetworkListManager* manager = nullptr;
+        if (SUCCEEDED(CoCreateInstance(__uuidof(NetworkListManager), nullptr,
+            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&manager)))) {
+          VARIANT_BOOL connected = VARIANT_FALSE, internet = VARIANT_FALSE;
+          const HRESULT local_result = manager->get_IsConnected(&connected);
+          const HRESULT internet_result = manager->get_IsConnectedToInternet(&internet);
+          if (SUCCEEDED(local_result) && SUCCEEDED(internet_result)) {
+            flutter::EncodableMap values;
+            values[flutter::EncodableValue("connected")] = flutter::EncodableValue(connected != VARIANT_FALSE);
+            values[flutter::EncodableValue("internet")] = flutter::EncodableValue(internet != VARIANT_FALSE);
+            completion->value = flutter::EncodableValue(values);
+            completion->success = true;
+          }
+          manager->Release();
+        }
+        CoUninitialize();
+      }
+      if (PostMessageW(window, kAsyncCompletionMessage, 0,
+          reinterpret_cast<LPARAM>(completion.get()))) completion.release();
+    });
     return;
   }
   if (method == "getBuildConfig") {

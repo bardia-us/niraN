@@ -22,6 +22,8 @@ import 'windows_core_selection.dart';
 import 'windows_sing_box_proxy_config_builder.dart';
 import 'windows_routing_policy.dart';
 import 'windows_traffic.dart';
+import 'windows_access_diagnostics.dart';
+import 'windows_network_diagnostics.dart';
 
 final class WindowsPlatformBackend
     implements NiranPlatformBackend, NiranRestartableBackend {
@@ -61,6 +63,42 @@ final class WindowsPlatformBackend
       onChanged: _emitTraffic,
     );
     _injectedTrafficQuery = trafficCounterQuery;
+    if (WindowsAccessDiagnostics.enabled) {
+      final networkDiagnostics = WindowsNetworkDiagnostics(
+        readNetwork: () => readWindowsNetworkState(_host),
+      );
+      var networkCheckPending = false;
+      DateTime? lastNetworkCheck;
+      void recordAccessDiagnostic(AccessDiagnostic event) {
+        _log(event.error == null ? 'info' : 'warning', event.line);
+        if (event.error != null &&
+            !networkCheckPending &&
+            (lastNetworkCheck == null ||
+                DateTime.now().difference(lastNetworkCheck!) >
+                    const Duration(seconds: 15))) {
+          networkCheckPending = true;
+          // No await: checks never delay the failure/result or block a retry.
+          unawaited(
+            (() async {
+              try {
+                final ready = _startupReady;
+                if (ready != null) await ready;
+                final value = await networkDiagnostics.check();
+                _log('info', value.line);
+                lastNetworkCheck = DateTime.now();
+              } finally {
+                networkCheckPending = false;
+              }
+            })(),
+          );
+        }
+      }
+
+      for (final event in WindowsAccessDiagnostics.recent) {
+        recordAccessDiagnostic(event);
+      }
+      WindowsAccessDiagnostics.events.listen(recordAccessDiagnostic);
+    }
     final nativeHost = _host;
     if (nativeHost is MethodChannelWindowsNativeHost) {
       _traySubscription = nativeHost.trayActions.listen(_handleTrayAction);
@@ -314,7 +352,10 @@ final class WindowsPlatformBackend
     } on Object catch (error) {
       await _enforceAccessGate(error);
       _subscriptionError = _subscriptionUserError(error);
-      _log('warning', 'Subscription update failed');
+      _log(
+        'warning',
+        'Subscription update failed: ${AccessFailure.from(error).kind}',
+      );
       if (emit) _emit('subscriptionError', _subscriptionError);
       rethrow;
     }
